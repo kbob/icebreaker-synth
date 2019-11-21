@@ -1,0 +1,3 @@
+[submodule "submodules/nmigen-examples"]
+	path = submodules/nmigen-examples
+	url = github.com:kbob/nmigen-examples
