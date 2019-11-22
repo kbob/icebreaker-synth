@@ -22,21 +22,25 @@ class MIDIDecoder(Elaboratable):
     def elaborate(self, platform):
 
         def is_message_start(byte):
+            # any byte with the high bit set
             return byte[7] != 0
 
         def is_voice_status(byte):
-            # Voice Category 0x80 to 0xEF
+            # Voice Category: 0x80 - 0xEF
             return byte[7] & (byte[4:8] != 0xF)
 
         def is_note_off(byte):
-            return (byte & 0xF0) == 0x80
+            # 0x80 - 0x8F
+            return byte[4:8] == 0x8
 
         def is_note_on(byte):
-            return (byte & 0xF0) == 0x90
+            # 0x90 - 0x9F
+            return byte[4:8] == 0x9
 
         def is_system_common_status(byte):
-            # System Commmons Category
-            return (byte & 0xF8) == 0xF0
+            # System Commmon Category: 0xF0 - 0xF7
+            return byte[3:8] == 0b11110
+            # return (byte & 0xF8) == 0xF0
 
         status_byte = Signal(8)
         status_valid = Signal()
@@ -66,8 +70,8 @@ class MIDIDecoder(Elaboratable):
                         ]
                 with m.Elif(is_system_common_status(self.serial_data)):
                     m.d.sync += [
-                        status_valid.eq(False)
-                    ]
+                        status_valid.eq(False),
+                     ]
                 # else this is a complete real-time message.
             with m.Else():
                 with m.If(status_valid):
@@ -110,45 +114,7 @@ class MIDIDecoder(Elaboratable):
                         # other three-byte messages
                     with m.Else():
                         Assert((data_index == 0) & (data_last == 0))
-                        ... # two-byte message is complete.
-
-            # if is_message_start(self.serial_data):
-            #     if is_voice_status:
-            #         status_byte = self.serial_data
-            #         status_valid = True
-            #         data_index = 0
-            #         if is_note_off:
-            #             data_last = 1
-            #         if is_note_on:
-            #             data_last = 1
-            #     elif is_system_common:
-            #         status_valid = False
-            #         next = NOT_MESSAGE
-            # else:
-            #     if status_valid:
-            #         if (data_index == 0) & (data_last == 1):
-            #             data_byte_1 = self.serial_data
-            #             data_index = 1
-            #         elif (data_index == 1) & (data_last == 1):
-            #             data_index = 0
-            #             if is_note_off(status_byte):
-            #                 self.note_off_rdy = True
-            #                 self.note_chan = status_byte[:4]
-            #                 self.note_key = date_byte_1[:6]
-            #                 self.note_on_
-            #                 self.note_onoff = False
-            #                 self.note_vel = serial.data[:6]
-            #             if is_note_on(status_byte):
-            #                 self.note_rdy = True
-            #                 self.note_chan = status_byte[:4]
-            #                 self.note_key = date_byte_1[:6]
-            #                 self.note_onoff = (velocity != 0)
-            #                 self.note_vel = serial.data[:6]
-            #             ... # more three-byte messages
-            #         else:
-            #             m.Assert((data_index == 0) & (data_last == 0))
-            #             ... # two-byte messages
-
+                        # two-byte message is complete.
         return m
 
 
