@@ -4,10 +4,7 @@ from nmigen import *
 from nmigen.build import *
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 
-from nmigen_lib.counter import Counter
-from nmigen_lib.timer import Timer
-from nmigen_lib.seven_segment.digit_pattern import DigitPattern
-from nmigen_lib.seven_segment.driver import SevenSegDriver
+from nmigen_lib import Counter, Timer, DigitPattern, SevenSegDriver
 
 
 class Top(Elaboratable):
@@ -18,7 +15,6 @@ class Top(Elaboratable):
         clk_freq = platform.default_clk_frequency
         min_refresh_freq = 100
         count_freq = 4
-        (type(clk_freq))
 
         m = Module()
         ticker = Timer(period=int(clk_freq // count_freq))

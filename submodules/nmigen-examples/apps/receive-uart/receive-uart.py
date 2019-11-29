@@ -42,9 +42,9 @@ class Top(Elaboratable):
         uart_divisor = int(clk_freq // uart_baud)
         status_duration = int(0.1 * clk_freq)
         uart_pins = platform.request('uart')
-        bad_led = platform.request('user_led', 0)
-        good_led = platform.request('user_led', 1)
-        digit_leds = [platform.request('user_led', i + 2)
+        bad_led = platform.request('led', 0)
+        good_led = platform.request('led', 1)
+        digit_leds = [platform.request('led', i + 2)
                       for i in range(5)]
 
         m = Module()
