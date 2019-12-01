@@ -96,6 +96,45 @@ class Oscillator(Elaboratable):
 
     def _calc_params(self, config):
 
+        # This is some unreadable code right here.
+        #
+        # Given the oscillator's sample rate, the min and max
+        # frequency depth (how many bits of frequency to use), and the
+        # frequency of some MIDI notes, we can calculate how many bits
+        # the phase accumulator needs to be, how many positions to
+        # shift the phase increment before adding it in, and a list of
+        # "base increments" (normalized for some octave).
+        #
+        # There is a lot of conflicting information on how well humans
+        # hear pitch.  The minimum perceptible pitch is somewhere
+        # between 1 cent and 20 cents. (1 cent is a ratio of
+        # 2**(1/1200) to 1.)  Our best pitch discrimination is in the
+        # mid range, which might be 100-2000 Hz or somewhere near
+        # there.
+        #
+        # The oscillator has a phase accumulator.  Every sample, an
+        # increment is calculated and added to the phase.  Low
+        # frequencies use a small increment.  A high sample rate makes
+        # the increment even smaller.  So we compromise pitch accuracy
+        # at the lowest frequencies to use a smaller phase
+        # accumulator.
+        # 
+        # `max_freq_depth` is the number of bits to use in the
+        # midrange.  `min_freq_depth` is the number of bits to use
+        # for the lowest notes.
+        #
+        # The default config is 16 bits for `max_freq_depth` and
+        # 11 bits for `min_freq_depth`.  Those are both much better
+        # than human perception.
+        #
+        # The `base_incs` are chosen to be the largest that will fit
+        # in `max_freq_depth` bits.  They correspond to some octave
+        # which depends on the sample rate and frequency depths.  The
+        # `shift` parameter, which is usually negative, says how many
+        # places to left shift the base_incs for MIDI's bottom octave
+        # of notes, which are between 8 and 16 Hz.  (Negative `shift`
+        # means to shift right.  Shifting right loses precision.)
+
         def MIDI_note_to_inc(note, phase_depth):
             f = MIDI_note_to_freq(note)
             inc = f / config.osc_rate * 2**phase_depth
@@ -129,7 +168,6 @@ class Oscillator(Elaboratable):
         mod = Signal.like(self.mod_in)
         pw = Signal.like(self.pw_in)
         octave = Signal(range(OCTAVES))
-        inv_octave = Signal.like(octave)
         step = Signal(range(STEPS))
         base_inc = Signal(self.inc_depth)
         step_incs = Array([Signal.like(base_inc, reset=inc)
@@ -169,7 +207,6 @@ class Oscillator(Elaboratable):
             with m.State(FSM.MODULUS):
                 m.d.sync += [
                     step.eq(note - mul12(octave)),
-                    inv_octave.eq(128 // 12 - octave),
                 ]
                 m.next = FSM.LOOKUP
 
