@@ -43,16 +43,9 @@ class SynthConfig:
     def osc_rate(self):
         return self.clk_freq // self.osc_divisor
 
-    # @property
-    # def out_depth(self):
-    #     return 16               # Hard code for now
-    #
-    # @property
-    # def osc_depth(self):
-    #     return 16               # Hard code for now
 
 if __name__ == '__main__':
     cfg = SynthConfig(48_000_000.0, 32)
     cfg.describe()
-    cfg1 = SynthConfig(48_000_000.0, 1024)
+    cfg1 = SynthConfig(12_000_000.0, 256)
     cfg1.describe()
