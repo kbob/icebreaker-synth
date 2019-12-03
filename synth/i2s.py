@@ -1,6 +1,7 @@
 #!/usr/bin/env nmigen
 
 from math import log2
+from numbers import Complex
 
 from nmigen import *
 from nmigen.build import Resource
@@ -71,6 +72,17 @@ class I2S(Elaboratable):
 class I2STx(Elaboratable):
 
     def __init__(self, clk_freq, tx_rate, tx_depth=16):
+
+        """I2S transmit side.  Generate an I2S stereo audio stream.
+
+           tx_rate can be between 2KHz and 200KHz, but is restricted to
+           specific fractions of clk_freq.  tx_depth can be either 16
+           or 24 bits.
+
+           This module will pick the "best" mode for the Cirrus CS4344
+           based on tx_rate and tx_depth.
+        """
+
         assert tx_depth in (16, 24), (
             f'I2STx: tx_depth = {tx_depth} must be 16 or 24.'
         )
@@ -101,6 +113,16 @@ class I2STx(Elaboratable):
         self.mclk_divisor = mclk_divisor
         self.lrck_divisor = lrck_divisor
 
+        # # Print all the variables.
+        # d = self.__dict__; d.update(locals())
+        # vars = {k: v
+        #         for (k, v) in d.items()
+        #         if isinstance(v, Complex)}
+        # w = len(max(vars, key=len))
+        # for k in sorted(vars):
+        #     print(f'{k:{w}} = {vars[k]:,}')
+        # print()
+
         self.tx_samples = Array([Signal(signed(tx_depth), name='sample0'),
                                  Signal(signed(tx_depth), name='sample1')])
         self.tx_stb = Signal()
@@ -118,45 +140,58 @@ class I2STx(Elaboratable):
         ]
 
     def elaborate(self, platform):
-
-        def is_power_of_2(n):
-            return n and not n & (n - 1)
-
         bitstream = Signal(2 * self.tx_depth)
+        pre_sd = Signal()
+        sd = Signal()
 
         m = Module()
 
         # There are four counters.
         #
-        # `fast_cnt` decrements at clk frequency, and underflows
-        #   at mclk frequency.
+        # `fast_cnt` decrements at clk frequency and underflows at mclk
+        #   frequency.  `fast_clk` is only needed/possible if mclk
+        #   frequency is less than clk_freq.  It is used to advance
+        #   `slow_cnt` and `mcnt`.
         #
-        # `slow_cnt` decrements at mclk frequency, and underflows
-        #   at lrck_frequeency.
+        # `slow_cnt` decrements at twice mclk frequency and underflows
+        #   at lrck_frequency.  It is used to reset `mcnt` each
+        #   lrck period.
         #
-        # `mcnt` increments at mclk frequency.  It is used to derive
-        #   all the I2S signals in 16 bit mode, all but `lrck` in
-        #   24 bit mode.
+        # `mcnt` increments at twice mclk frequency.  It is used to
+        #   derive all the I2S signals in 16 bit mode and all except
+        #  `lrck` in 24 bit mode.
         #
         # `lr_cnt` is only present in 24-bit mode.  It is used to toggle
-        #   `lrck` in 24 bit mode.  It decrements at mclk frequency,
-        #   and underflows when it's time to toggle `lrck`.
+        #   `lrck` in 24 bit mode.  It decrements at twice mclk
+        #   frequency, and underflows when it's time to toggle `lrck`.
+        #   In 16-bit mode, `lrck` is simply the high bit of `mcnt`.
         #
-        lr_cnt_needed = not is_power_of_2(self.lrck_divisor)
-        fast_cnt = Signal(range(-1, self.mclk_divisor - 1))
-        slow_cnt = Signal(range(-1, self.lrck_divisor - 1))
-        mcnt = Signal(range(self.lrck_divisor), reset=self.lrck_divisor - 2)
-        if lr_cnt_needed:
-            lr_cnt = Signal(range(-1, self.lrck_divisor // 2 - 1))
-            pre_lrck = Signal(reset=1)
+        fast_cnt_needed = self.mclk_divisor >= 2
+        if fast_cnt_needed:
+            fast_max = self.mclk_divisor // 2 - 2
+            fast_cnt = Signal(range(-1, fast_max + 1))
+            slow_inc = Signal()
+            with m.If(fast_cnt[-1]):
+                m.d.sync += [
+                    fast_cnt.eq(fast_max),
+                    slow_inc.eq(True),
+                ]
+            with m.Else():
+                m.d.sync += [
+                    fast_cnt.eq(fast_cnt - 1),
+                    slow_inc.eq(False),
+                ]
+        else:
+            slow_inc = True
 
-        with m.If(fast_cnt[-1]):
-            m.d.sync += [
-                fast_cnt.eq(self.mclk_divisor - 2),
-            ]
+        slow_max = 2 * self.lrck_divisor - 2
+        slow_cnt = Signal(range(-1, slow_max + 1))
+        mcnt_max = 2 * self.lrck_divisor - 1
+        mcnt = Signal(range(mcnt_max + 1), reset=mcnt_max)
+        with m.If(slow_inc):
             with m.If(slow_cnt[-1]):
                 m.d.sync += [
-                    slow_cnt.eq(self.lrck_divisor - 2),
+                    slow_cnt.eq(slow_max),
                     mcnt.eq(0),
                 ]
             with m.Else():
@@ -164,23 +199,25 @@ class I2STx(Elaboratable):
                     slow_cnt.eq(slow_cnt - 1),
                     mcnt.eq(mcnt + 1),
                 ]
-            if lr_cnt_needed:
+
+        lr_cnt_needed = self.tx_depth == 24
+        if lr_cnt_needed:
+            lr_cnt_max = self.lrck_divisor - 2
+            lr_cnt = Signal(range(-1, lr_cnt_max + 1))
+            pre_lrck = Signal(reset=1)
+            with m.If(slow_inc):
                 with m.If(lr_cnt[-1]):
                     m.d.sync += [
-                        lr_cnt.eq(self.lrck_divisor // 2 - 2),
+                        lr_cnt.eq(lr_cnt_max),
                         pre_lrck.eq(~pre_lrck),
                     ]
                 with m.Else():
                     m.d.sync += [
                         lr_cnt.eq(lr_cnt - 1),
                     ]
-        with m.Else():
-            m.d.sync += [
-                fast_cnt.eq(fast_cnt - 1),
-            ]
 
         # Load and ack next frame at start of period.
-        with m.If(slow_cnt[-1] & fast_cnt[-1]):
+        with m.If(slow_cnt[-1] & slow_inc):
             m.d.sync += [
                 # I2S bitstream is MSB first, so reverse bits here.
                 bitstream.eq(Mux(self.tx_stb,
@@ -194,11 +231,18 @@ class I2STx(Elaboratable):
                 self.tx_ack.eq(False),
             ]
 
+        # The SD signal needs to be delayed by one SCK period.
+        # So the LSB is actually sent after LRCK has transitioned.
+        # This is apparently how I2S works.
         sck_bit = -7 if lr_cnt_needed else -6
+        with m.If(fast_cnt[-1] & (~mcnt[:sck_bit + 1] == 0)):
+            m.d.sync += [
+                sd.eq(bitstream.bit_select(mcnt[sck_bit + 1:], 1))
+            ]
         m.d.sync += [
             self.tx_i2s.mclk.eq(mcnt[0]),
             self.tx_i2s.sck.eq(mcnt[sck_bit]),
-            self.tx_i2s.sd.eq(bitstream.bit_select(mcnt[sck_bit + 1:], 1)),
+            self.tx_i2s.sd.eq(sd),
             self.tx_i2s.lrck.eq(pre_lrck if lr_cnt_needed else mcnt[-1]),
         ]
         return m
