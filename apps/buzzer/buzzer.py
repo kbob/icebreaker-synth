@@ -1,6 +1,8 @@
 #!/usr/bin/env nmigen
 
 from numbers import Complex
+import os
+import sys
 import time
 
 from nmigen import *
@@ -56,9 +58,6 @@ class Top(Elaboratable):
 
 
 def build_and_program(pll_freq, sample_freq, depth):
-    print(f'Programming w/ PLL = {pll_freq / 1_000_000} MHz, '
-          f'samples = {depth} x {sample_freq:,}')
-
     platform = ICEBreakerPlatform()
     platform.add_resources([
         Resource('i2s', 0,
@@ -70,6 +69,12 @@ def build_and_program(pll_freq, sample_freq, depth):
     ])
     top = Top(pll_freq=pll_freq, sample_freq=sample_freq, depth=depth)
     platform.build(top, do_program=True)
+    colorize = os.isatty(sys.stdout.fileno())
+    if colorize:
+        print('\33[1;41m')
+    print(f'Buzzer w/ PLL = {pll_freq / 1_000_000} MHz, '
+          f'samples = {depth} x {sample_freq:,}', end='')
+    print('\33[m\n' if colorize else '', flush=True)
 
 
 def build_and_program_variants():
