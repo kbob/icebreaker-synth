@@ -6,7 +6,8 @@ from math import ceil, log2
 from nmigen import *
 
 from nmigen_lib.util import Main, delay
-from synth import SynthConfig, MIDI_note_to_freq
+from synth.config import SynthConfig
+from synth.util import MIDI_note_to_freq
 
 MIDI_NOTES = 128
 STEPS = 12 # per octave
@@ -65,7 +66,7 @@ assert all(mul12(n) == 12 * n for n in range(OCTAVES))
 #
 #     Step EMIT:
 #        calc saw_out = 32767 - acc
-#        calc square_out = inc[-8:] >= {0, pw} ? +32767 : -32767
+#        calc pulse_out = pulse_up ? +32767 : -32767
 #        rdy_out = True
 #        next = IDLE
 
@@ -91,7 +92,7 @@ class Oscillator(Elaboratable):
         self.pw_in = Signal(7, reset=~0)
 
         self.rdy_out = Signal()
-        self.square_out = Signal(signed(config.osc_depth))
+        self.pulse_out = Signal(signed(config.osc_depth))
         self.saw_out = Signal(signed(config.osc_depth))
 
     def _calc_params(self, config):
@@ -189,6 +190,25 @@ class Oscillator(Elaboratable):
                 tick.eq(tick - 1),
             ]
 
+        # Calculate pulse wave edges.  The pulse must rise and fall
+        # exactly once per cycle.
+        prev_msb = Signal()
+        new_cycle = Signal()
+        pulse_up = Signal()
+        up_latch = Signal()
+        pw8 = Cat(pw, Const(0, unsigned(1)))
+        m.d.sync += [
+            prev_msb.eq(phase[-1]),
+        ]
+        m.d.comb += [
+            new_cycle.eq(~phase[-1] & prev_msb),
+            # Widen pulse to one sample period minimum.
+            pulse_up.eq(new_cycle | (up_latch & (phase[-8:] <= pw8))),
+        ]
+        m.d.sync += [
+            up_latch.eq((new_cycle | up_latch) & pulse_up),
+        ]
+
         with m.FSM():
 
             with m.State(FSM.IDLE):
@@ -238,8 +258,7 @@ class Oscillator(Elaboratable):
                 pw8 = Cat(pw, Const(0, unsigned(1)))
                 m.d.sync += [
                     self.saw_out.eq(samp_max - phase[-self.inc_depth:]),
-                    self.square_out.eq(Mux(phase[-8:] <= pw8,
-                                           samp_max, -samp_max)),
+                    self.pulse_out.eq(Mux(pulse_up, samp_max, -samp_max)),
                     self.rdy_out.eq(True),
                 ]
                 m.next = FSM.IDLE
@@ -258,6 +277,7 @@ if __name__ == '__main__':
             for note in range(60 + 12, 60 + 36 + 1, 4):
                 for _ in range(200):
                     yield design.note_in.eq(note)
+                    yield design.pw_in.eq(50 * note - 360)
                     yield
                     yield design.sync_in.eq(0)
                     yield from delay(divisor - 1)
