@@ -251,7 +251,7 @@ class I2STx(Elaboratable):
 class I2SRx(Elaboratable):
 
     def __init__(self, clk_freq, mclk_divisor, rx_depth=16):
-        raise NotImplementedError()
+        raise NotImplementedError("I'm not writing it.  YOU write it.")
 
     def elaborate(self, platform):
         ...
