@@ -118,7 +118,7 @@ class Oscillator(Elaboratable):
         # the increment even smaller.  So we compromise pitch accuracy
         # at the lowest frequencies to use a smaller phase
         # accumulator.
-        # 
+        #
         # `max_freq_depth` is the number of bits to use in the
         # midrange.  `min_freq_depth` is the number of bits to use
         # for the lowest notes.
@@ -254,8 +254,10 @@ if __name__ == '__main__':
     with Main(design).sim as sim:
         @sim.sync_process
         def note_proc():
-            for _ in range(500):
-                yield design.note_in.eq(24+60)
-                yield
-                yield design.sync_in.eq(0)
-                yield from delay(divisor - 1)
+            # from C5 to C7 by major thirds:
+            for note in range(60 + 12, 60 + 36 + 1, 4):
+                for _ in range(200):
+                    yield design.note_in.eq(note)
+                    yield
+                    yield design.sync_in.eq(0)
+                    yield from delay(divisor - 1)
