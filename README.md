@@ -12,7 +12,7 @@ What's the minimum needed to get something working?
  * oscillator
  * gate
  * I2S output
-
+...
 ## UART input
 
 31250 baud.  Should be 5V but we'll ignore that.  UART is a common
@@ -36,15 +36,30 @@ sample rate, it can get by with a 16 bit word; at higher rates
 it will need 17-22 bits.  Maybe nMigen will be smart enough to
 split the note table across multiple BRAMs.
 
+Update 2019-12-04: I merged the note-to-frequency code into the
+oscillator module.  It only stores frequencies for a single octave,
+then shifts the frequencies left or right for different octaves.
+
+This will probably require redesign at some point.
+
 ## Oscillator
 
 I've already got that.  See [buzzer.py](https://github.com/kbob/nmigen-examples/blob/master/lib/buzzer.py).
 
 The oscillator needs a gate.
 
+## Gate
+
+Pretty simple.  Just MUX the signal with zero.
+
 ## I2S output
 
 I've also got that in the nmigen-examples repository.
+
+Update 2019-12-04: I updated the I2S module to work with both
+16 and 24 bit samples and to automatically select 1X, 2X or 4X
+mode based on incoming sample rate.  It's still a tricky dance
+to pick a sample rate that works with the FPGA clock rate, though.
 
 
 # How to compile
@@ -54,5 +69,5 @@ global build script or something.
 
 ```sh
 $ cd synth
-$ PYTHONPATH=../submodules/nmigen_examples nmigen <module>.py simulate
+$ PYTHONPATH=..:../submodules/nmigen_examples nmigen <module>.py simulate
 ```
