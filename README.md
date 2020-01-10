@@ -12,7 +12,19 @@ What's the minimum needed to get something working?
  * oscillator
  * gate
  * I2S output
-...
+
+
+# Next Step
+
+The aliasing sounds pretty awful.  The first thing to do is
+raise the sample rate.  I've mapped out a plan to oversample
+by 32X to 1.5 MHz.
+
+I could implement a pre-filtered wavetable for saw and square.
+
+I really prefer PolyBLEP, but it's too complicated for an FPGA.
+
+
 ## UART input
 
 31250 baud.  Should be 5V but we'll ignore that.  UART is a common
