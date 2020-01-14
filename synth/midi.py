@@ -49,6 +49,26 @@ class MIDIDecoder(Elaboratable):
             # 0x90 - 0x9F
             return byte[4:8] == 0x9
 
+        def is_poly_key_pressure(byte):
+            # 0xA0 - 0xAF
+            return byte[4:8] == 0xA
+
+        def is_control_change(byte):
+            # 0xB0 - 0xBF
+            return byte[4:8] == 0xB
+
+        def is_program_change(byte):
+            # 0xC0 - 0xCF
+            return byte[4:8] == 0xC
+
+        def is_channel_pressure(byte):
+            # 0xD0 - 0xDF
+            return byte[4:8] == 0xD
+
+        def is_pitch_bend_change(byte):
+            # 0xE0 - 0xEF
+            return byte[4:8] == 0xE
+
         def is_system_common_status(byte):
             # System Commmon Category: 0xF0 - 0xF7
             return byte[3:8] == 0b11110
@@ -80,12 +100,33 @@ class MIDIDecoder(Elaboratable):
                     m.d.sync += [
                         status_byte.eq(i_data),
                         status_valid.eq(True),
+                        data_index.eq(0),
                     ]
                     with m.If(is_note_off(i_data)):
                         m.d.sync += [
                             data_last.eq(1),
                         ]
                     with m.If(is_note_on(i_data)):
+                        m.d.sync += [
+                            data_last.eq(1),
+                        ]
+                    with m.If(is_poly_key_pressure(i_data)):
+                        m.d.sync += [
+                            data_last.eq(1),
+                        ]
+                    with m.If(is_control_change(i_data)):
+                        m.d.sync += [
+                            data_last.eq(1),
+                        ]
+                    with m.If(is_program_change(i_data)):
+                        m.d.sync += [
+                            data_last.eq(0),
+                        ]
+                    with m.If(is_channel_pressure(i_data)):
+                        m.d.sync += [
+                            data_last.eq(0),
+                        ]
+                    with m.If(is_pitch_bend_change(i_data)):
                         m.d.sync += [
                             data_last.eq(1),
                         ]
@@ -108,18 +149,9 @@ class MIDIDecoder(Elaboratable):
                         m.d.sync += [
                             data_index.eq(0),
                         ]
-                        # # Or ...
-                        # channel = status_byte[:4]
-                        # key = data_byte_1[:7]
-                        # velocity = i_data[:7]
-                        channel = Signal(4)
-                        key = Signal(7)
-                        velocity = Signal(7)
-                        m.d.comb += [
-                            channel.eq(status_byte[:4]),
-                            key.eq(data_byte_1[:7]),
-                            velocity.eq(i_data[:7]),
-                        ]
+                        channel = status_byte[:4]
+                        key = data_byte_1[:7]
+                        velocity = i_data[:7]
 
                         with m.If(is_note_off(status_byte)):
                             m.d.sync += [
