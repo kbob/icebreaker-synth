@@ -1,11 +1,13 @@
 #!/usr/bin/env nmigen
 
-from nmigen import *
-from nmigen.build import *
+from nmigen import Elaboratable, Module, Signal, signed
+from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
 from nmigen_lib import PLL, UARTRx
+from nmigen_lib.pipe import Pipeline
+from nmigen_lib.pipe.uart import P_UARTRx
 from nmigen_lib.seven_segment.digit_pattern import DigitPattern
 from nmigen_lib.seven_segment.driver import SevenSegDriver
 from synth import Gate, I2STx, MIDIDecoder, MonoPriority
@@ -64,7 +66,7 @@ class Top(Elaboratable):
 
         m = Module()
         pll = PLL(freq_in_mhz=clk_in_freq_mhz, freq_out_mhz=clk_freq_mhz)
-        uart_rx = UARTRx(divisor=uart_divisor)
+        uart_rx = P_UARTRx(divisor=uart_divisor)
         recv_status = OneShot(duration=status_duration)
         err_status = OneShot(duration=status_duration)
         midi_decode = MIDIDecoder()
@@ -79,40 +81,39 @@ class Top(Elaboratable):
         m.domains += pll.domain # This switches the default clk domain
                                 # to the PLL-generated domain for Top
                                 # and all submodules.
-        m.submodules += [pll]
-        m.submodules += [uart_rx, midi_decode, pri]
-        m.submodules += [recv_status, err_status]
-        m.submodules += [ones_segs, tens_segs, driver]
-        m.submodules += [osc, gate0, gate1, i2s_tx]
+        m.submodules.pll = pll
+        m.submodules.uart_rx = uart_rx
+        m.submodules.midi = midi_decode
+        m.submodules.pri = pri
+        m.submodules.recv_status = recv_status
+        m.submodules.err_status = err_status
+        m.submodules.ones_segs = ones_segs
+        m.submodules.tens_segs = tens_segs
+        m.submodules.driver = driver
+        m.submodules.osc = osc
+        m.submodules.gate0 = gate0
+        m.submodules.gate1 = gate1
+        m.submodules.i2s_tx = i2s_tx
+        m.submodules.audio_pipeline = Pipeline([uart_rx, midi_decode, pri])
+
+        note_valid = midi_decode.note_msg_inlet.o_valid
+        note_on = midi_decode.note_msg_inlet.o_data.onoff
+
         m.d.comb += [
             pll.clk_pin.eq(clk_pin),
 
             uart_rx.rx_pin.eq(midi_uart_pins.rx),
-            dbg_pins.dbg[0].eq(midi_uart_pins.rx),
-            dbg_pins.dbg[1].eq(uart_rx.rx_rdy),
-            dbg_pins.dbg[2].eq(uart_rx.rx_err),
-            dbg_pins.dbg[3].eq(uart_rx.dbg[0]),
-
-            midi_decode.serial_data.eq(uart_rx.rx_data),
-            midi_decode.serial_rdy.eq(uart_rx.rx_rdy),
 
             # Good LED flickers when Note On received.
-            recv_status.trg.eq(midi_decode.note_on_rdy),
+            recv_status.trg.eq(note_valid & note_on),
             good_led.eq(recv_status.out),
 
             # Bad LED flickers when Note Off received.
-            err_status.trg.eq(uart_rx.rx_err),
-            # err_status.trg.eq(midi_decode.note_off_rdy),
+            err_status.trg.eq(note_valid & ~note_on),
             bad_led.eq(err_status.out),
 
-            pri.note_on_rdy.eq(midi_decode.note_on_rdy),
-            pri.note_off_rdy.eq(midi_decode.note_off_rdy),
-            pri.note_chan.eq(midi_decode.note_chan),
-            pri.note_key.eq(midi_decode.note_key),
-            pri.note_vel.eq(midi_decode.note_vel),
-
-            ones_segs.digit_in.eq(pri.mono_key[:4]),
-            tens_segs.digit_in.eq(pri.mono_key[4:]),
+            ones_segs.digit_in.eq(pri.mono_note[:4]),
+            tens_segs.digit_in.eq(pri.mono_note[4:]),
 
             driver.pwm.eq(pri.mono_gate),
             driver.segment_patterns[0].eq(ones_segs.segments_out),
@@ -121,15 +122,12 @@ class Top(Elaboratable):
             seg7_pins.eq(driver.seg7),
 
             osc.sync_in.eq(False),
-            osc.note_in.eq(pri.mono_key),
-            # dbg_pins.dbg[0].eq(osc.saw_out[1]),
+            osc.note_in.eq(pri.mono_note),
 
             gate0.signal_in.eq(osc.pulse_out),
             gate1.signal_in.eq(osc.saw_out),
             gate0.gate_in.eq(pri.mono_gate),
             gate1.gate_in.eq(pri.mono_gate),
-            # dbg_pins.dbg[1].eq(gate1.signal_out[1]),
-            # dbg_pins.dbg[0].eq(gate1.signal_in[1]),
 
             i2s_tx.tx_stb.eq(True),
             i2s_tx.tx_samples[0].eq(gate0.signal_out),
@@ -153,15 +151,16 @@ def assemble_platform():
     seg7 = Resource('seg7', 0,
         Subsignal('segs', Pins('1 2 3 4 7 8 9', conn=seg7_conn, dir='o')),
         Subsignal('digit', Pins('10', conn=seg7_conn, dir='o'))
-        )
+    )
     midi = UARTResource(1, rx='39', tx='40',
         attrs=Attrs(IO_STANDARD='SB_LVCMOS')
-        )
+    )
     dbg = Resource('dbg', 0,
         Subsignal('dbg', Pins('7 8 9 10', conn=i2s_conn, dir='o')),
-        )
+    )
     platform.add_resources((i2s, seg7, midi, dbg))
     return platform
+
 
 if __name__ == '__main__':
     platform = assemble_platform()

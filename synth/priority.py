@@ -6,6 +6,8 @@ from nmigen.asserts import *
 from nmigen_lib.util.main import Main
 from nmigen_lib.util import delay
 
+from synth.midi import note_msg_spec
+
 
 class MonoPriority(Elaboratable):
 
@@ -18,58 +20,67 @@ class MonoPriority(Elaboratable):
     def __init__(self, channel=None, use_velocity=False):
         self.channel = channel
         self.use_velocity = use_velocity
-        self.note_on_rdy = Signal()
-        self.note_off_rdy = Signal()
-        self.note_chan = Signal(4)
-        self.note_key = Signal(7)
-        self.note_vel = Signal(7)
+        self.note_outlet = note_msg_spec.outlet()
         self.mono_gate = Signal()
-        self.mono_key = Signal(7)
-        self.mono_vel = Signal(7)
-        self.ports = [sig
-                      for sig in self.__dict__.values()
-                      if isinstance(sig, Signal)]
+        self.mono_note = Signal(7)
+        self.mono_velocity = Signal(7)
 
     def elaborate(self, platform):
-        channel_ok = Signal()
-        velocity = Signal(7)
+        i_onoff = self.note_outlet.i_data.onoff
+        i_channel = self.note_outlet.i_data.channel
+        i_note = self.note_outlet.i_data.note
+        i_velocity = self.note_outlet.i_data.velocity
+
+        if self.channel is None:
+            channel_ok = True
+        else:
+            channel_ok = i_channel == self.channel
+
+        if self.use_velocity:
+            velocity = i_velocity
+        else:
+            velocity = Const(64)
 
         m = Module()
-        if self.channel is None:
-            m.d.comb += [
-                channel_ok.eq(True),
-            ]
-        else:
-            m.d.comb += [
-                channel_ok.eq(self.note_chan == self.channel),
-            ]
-        if self.use_velocity:
-            m.d.comb += [
-                velocity.eq(self.note_vel),
-            ]
-        else:
-            m.d.comb += [
-                velocity.eq(64),
-            ]
-
-        Assume (~self.note_on_rdy | ~self.note_off_rdy)
-        with m.If(self.note_on_rdy & channel_ok):
-            m.d.sync += [
-                self.mono_gate.eq(True),
-                self.mono_key.eq(self.note_key),
-                self.mono_vel.eq(velocity),
-            ]
-        with m.If(self.note_off_rdy & channel_ok):
-            with m.If(self.note_key == self.mono_key):
-                m.d.sync += [
-                    self.mono_gate.eq(False),
-                ]
+        m.d.comb += [
+            self.note_outlet.o_ready.eq(True),
+        ]
+        with m.If(self.note_outlet.received()):
+            with m.If(channel_ok):
+                with m.If(i_onoff):
+                    m.d.sync += [
+                        self.mono_gate.eq(True),
+                        self.mono_note.eq(i_note),
+                        self.mono_velocity.eq(velocity),
+                    ]
+                with m.Elif(i_note == self.mono_note):
+                    m.d.sync += [
+                        self.mono_gate.eq(False),
+                    ]
         return m
 
 
 if __name__ == '__main__':
     design = MonoPriority(channel=3, use_velocity=True)
-    with Main(design).sim as sim:
+
+    # Workaround nMigen issue #280
+    m = Module()
+    m.submodules.design = design
+    i_valid = Signal()
+    i_onoff = Signal()
+    i_channel = Signal(4)
+    i_note = Signal(7)
+    i_velocity = Signal(7)
+    m.d.comb += [
+        design.note_outlet.i_valid.eq(i_valid),
+        design.note_outlet.i_data.onoff.eq(i_onoff),
+        design.note_outlet.i_data.channel.eq(i_channel),
+        design.note_outlet.i_data.note.eq(i_note),
+        design.note_outlet.i_data.velocity.eq(i_velocity),
+    ]
+
+    #280 with Main(design).sim as sim:
+    with Main(m).sim as sim:
         @sim.sync_process
         def sim_notes():
             notes = [
@@ -81,12 +92,11 @@ if __name__ == '__main__':
                 (0, 3, 64,   0),    # ok, stop
             ]
             for (on, chan, key, vel) in notes:
-                yield design.note_on_rdy.eq(on)
-                yield design.note_off_rdy.eq(not on)
-                yield design.note_chan.eq(chan)
-                yield design.note_key.eq(key)
-                yield design.note_vel.eq(vel)
+                yield i_valid.eq(True)
+                yield i_onoff.eq(on)
+                yield i_channel.eq(chan)
+                yield i_note.eq(key)
+                yield i_velocity.eq(vel)
                 yield
-                yield design.note_on_rdy.eq(False)
-                yield design.note_off_rdy.eq(False)
+                yield i_valid.eq(False)
                 yield from delay(3)

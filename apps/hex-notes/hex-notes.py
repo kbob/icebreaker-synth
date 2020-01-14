@@ -1,7 +1,7 @@
 #!/usr/bin/env nmigen
 
-from nmigen import *
-from nmigen.build import *
+from nmigen import Elaboratable, Module, Signal
+from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
@@ -60,25 +60,27 @@ class Top(Elaboratable):
         ones_segs = DigitPattern()
         tens_segs = DigitPattern()
         driver = SevenSegDriver(clk_freq, 100, 1)
-        m.submodules += [uart_rx, recv_status, err_status]
-        m.submodules += [midi_decode, pri]
-        m.submodules += [ones_segs, tens_segs, driver]
-        m.submodules += Pipeline([uart_rx, midi_decode])
+        m.submodules.uart_rx = uart_rx
+        m.submodules.recv_status = recv_status
+        m.submodules.err_status = err_status
+        m.submodules.midi = midi_decode
+        m.submodules.pri = pri
+        m.submodules.ones_segs = ones_segs
+        m.submodules.tens_segs = tens_segs
+        m.submodules.driver = driver
+        m.submodules.pipeline = Pipeline([uart_rx, midi_decode, pri])
+
+        note_valid = midi_decode.note_msg_inlet.o_valid
+        note_on = midi_decode.note_msg_inlet.o_data.onoff
+
         m.d.comb += [
             uart_rx.rx_pin.eq(uart_pins.rx),
+            recv_status.trg.eq(note_valid & note_on),
+            err_status.trg.eq(note_valid & ~note_on),
             good_led.eq(recv_status.out),
-            recv_status.trg.eq(midi_decode.note_on_rdy),
-            err_status.trg.eq(midi_decode.note_off_rdy),
             bad_led.eq(err_status.out),
-            # midi_decode.serial_data.eq(uart_rx.rx_data),
-            # midi_decode.serial_rdy.eq(uart_rx.rx_rdy),
-            pri.note_on_rdy.eq(midi_decode.note_on_rdy),
-            pri.note_off_rdy.eq(midi_decode.note_off_rdy),
-            pri.note_chan.eq(midi_decode.note_chan),
-            pri.note_key.eq(midi_decode.note_key),
-            pri.note_vel.eq(midi_decode.note_vel),
-            ones_segs.digit_in.eq(pri.mono_key[:4]),
-            tens_segs.digit_in.eq(pri.mono_key[4:]),
+            ones_segs.digit_in.eq(pri.mono_note[:4]),
+            tens_segs.digit_in.eq(pri.mono_note[4:]),
             driver.pwm.eq(pri.mono_gate),
             driver.segment_patterns[0].eq(ones_segs.segments_out),
             driver.segment_patterns[1].eq(tens_segs.segments_out),

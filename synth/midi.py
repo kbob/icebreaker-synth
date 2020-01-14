@@ -1,16 +1,20 @@
 #!/usr/bin/env nmigen
 
+from collections import namedtuple
+
 from nmigen import *
-from nmigen.asserts import *
+from nmigen.asserts import Assert
+from nmigen.back.pysim import Passive
 
 from nmigen_lib.pipe import PipeSpec
 from nmigen_lib.util import Main, delay
 
 
-note_onoff_spec = PipeSpec((
-    ('chan', unsigned(4)),
-    ('key', unsigned(7)),
-    ('vel', unsigned(7)),
+note_msg_spec = PipeSpec((
+    ('onoff', unsigned(1)),
+    ('channel', unsigned(4)),
+    ('note', unsigned(7)),
+    ('velocity', unsigned(7)),
 ))
 
 
@@ -18,18 +22,12 @@ class MIDIDecoder(Elaboratable):
 
     def __init__(self):
         self.serial_outlet = PipeSpec(8).outlet()
-        # self.note_on_inlet = note_onoff_spec.inlet()
-        # self.note_off_inlet = note_onoff_spec.inlet()
-        # self.serial_data = Signal(8)
-        # self.serial_rdy = Signal()
-        self.note_on_rdy = Signal()
-        self.note_off_rdy = Signal()
-        self.note_chan = Signal(4)
-        self.note_key = Signal(7)
-        self.note_vel = Signal(7)
-        # self.ports = [sig
-        #               for sig in self.__dict__.values()
-        #               if isinstance(sig, Signal)]
+        self.note_msg_inlet = note_msg_spec.inlet()
+        # self.note_on_rdy = Signal()
+        # self.note_off_rdy = Signal()
+        # self.note_chan = Signal(4)
+        # self.note_key = Signal(7)
+        # self.note_vel = Signal(7)
 
     def elaborate(self, platform):
 
@@ -72,11 +70,10 @@ class MIDIDecoder(Elaboratable):
         def is_system_common_status(byte):
             # System Commmon Category: 0xF0 - 0xF7
             return byte[3:8] == 0b11110
-            # return (byte & 0xF8) == 0xF0
 
         i_data = self.serial_outlet.i_data
-        # note_off_data = self.note_off_inlet.o_data
-        # note_on_data = self.note_on_inlet.o_data
+        o_note = self.note_msg_inlet.o_data
+        o_note_valid = self.note_msg_inlet.o_valid
         status_byte = Signal(8)
         status_valid = Signal()
         data_last = Signal()
@@ -87,13 +84,12 @@ class MIDIDecoder(Elaboratable):
         m.d.comb += [
             self.serial_outlet.o_ready.eq(True),
         ]
-        m.d.sync += [
-            self.note_on_rdy.eq(False),
-            self.note_off_rdy.eq(False),
-            # self.note_on_inlet.o_valid.eq(False),
-            # self.note_off_inlet.o_valid.eq(False),
-        ]
-        # with m.If(self.serial_rdy):
+        with m.If(self.note_msg_inlet.sent()):
+            m.d.sync += [
+                # self.note_on_rdy.eq(False),
+                # self.note_off_rdy.eq(False),
+                o_note_valid.eq(False),
+            ]
         with m.If(self.serial_outlet.received()):
             with m.If(is_message_start(i_data)):
                 with m.If(is_voice_status(i_data)):
@@ -155,22 +151,28 @@ class MIDIDecoder(Elaboratable):
 
                         with m.If(is_note_off(status_byte)):
                             m.d.sync += [
-                                self.note_off_rdy.eq(True),
-                                self.note_chan.eq(channel),
-                                self.note_key.eq(key),
-                                self.note_vel.eq(velocity),
-                                # self.note_off_inlet.o_valid.eq(True),
-                                # note_off_data.chan.eq(channel),
-                                # note_off_data.key.eq(key),
-                                # note_off_data.vel.eq(velocity),
+                                # self.note_off_rdy.eq(True),
+                                # self.note_chan.eq(channel),
+                                # self.note_key.eq(key),
+                                # self.note_vel.eq(velocity),
+                                o_note_valid.eq(True),
+                                o_note.onoff.eq(False),
+                                o_note.channel.eq(channel),
+                                o_note.note.eq(key),
+                                o_note.velocity.eq(velocity),
                             ]
                         with m.If(is_note_on(status_byte)):
                             m.d.sync += [
-                                self.note_on_rdy.eq(velocity != 0),
-                                self.note_off_rdy.eq(velocity == 0),
-                                self.note_chan.eq(channel),
-                                self.note_key.eq(key),
-                                self.note_vel.eq(velocity),
+                                # self.note_on_rdy.eq(velocity != 0),
+                                # self.note_off_rdy.eq(velocity == 0),
+                                # self.note_chan.eq(channel),
+                                # self.note_key.eq(key),
+                                # self.note_vel.eq(velocity),
+                                o_note_valid.eq(True),
+                                o_note.onoff.eq(velocity != 0),
+                                o_note.channel.eq(channel),
+                                o_note.note.eq(key),
+                                o_note.velocity.eq(velocity),
                             ]
                         # other three-byte messages
                     with m.Else():
@@ -187,9 +189,11 @@ if __name__ == '__main__':
     m.submodules.design = design
     i_valid = Signal()
     i_data = Signal(8)
+    i_note_ready = Signal()
     m.d.comb += [
         design.serial_outlet.i_valid.eq(i_valid),
         design.serial_outlet.i_data.eq(i_data),
+        design.note_msg_inlet.i_ready.eq(i_note_ready),
     ]
 
     #280 with Main(design).sim as sim:
@@ -209,15 +213,49 @@ if __name__ == '__main__':
                 if d is Pause:
                     yield from delay(5)
                 else:
-                    # yield design.serial_data.eq(d)
-                    # yield design.serial_rdy.eq(True)
                     #280 yield design.serial_outlet.i_data.eq(d)
                     #280 yield design.serial_outlet.i_valid.eq(True)
                     yield i_data.eq(d)
                     yield i_valid.eq(True)
                     yield
-                    # yield design.serial_rdy.eq(False)
                     #280 yield design.serial_outlet.i_valid.eq(False)
                     yield i_valid.eq(False)
                     yield from delay(i % 3)
-            yield from delay(2)
+            yield from delay(5)
+
+        @sim.sync_process
+        def note_sink():
+            NoteMsg = namedtuple('NoteMsg', 'onoff channel note velocity')
+            expected = [
+                NoteMsg(True, 3, 60, 64),
+                NoteMsg(True, 3, 67, 96),
+                NoteMsg(False, 3, 60, 32),
+                NoteMsg(False, 3, 67, 0),
+            ]
+            expected_index = 0
+            yield Passive()
+            #280
+            yield i_note_ready.eq(False)
+            while True:
+                valid = yield design.note_msg_inlet.o_valid
+                #280
+                ready = yield i_note_ready
+                if valid and not ready:
+                    yield from delay(expected_index)
+                    #280
+                    yield i_note_ready.eq(True)
+                elif valid and ready:
+                    #280
+                    yield i_note_ready.eq(False)
+                    actual = NoteMsg(
+                        (yield design.note_msg_inlet.o_data.onoff),
+                        (yield design.note_msg_inlet.o_data.channel),
+                        (yield design.note_msg_inlet.o_data.note),
+                        (yield design.note_msg_inlet.o_data.velocity),
+                    )
+                    assert expected_index < len(expected)
+                    assert actual == expected[expected_index], (
+                        f'expected {expected[expected_index]}, got {actual}'
+                    )
+                    expected_index += 1
+                yield
