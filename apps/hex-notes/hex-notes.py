@@ -5,7 +5,8 @@ from nmigen.build import *
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
-from nmigen_lib import UARTRx
+from nmigen_lib.pipe import Pipeline
+from nmigen_lib.pipe.uart import P_UARTRx
 from nmigen_lib.seven_segment.digit_pattern import DigitPattern
 from nmigen_lib.seven_segment.driver import SevenSegDriver
 from synth import MIDIDecoder, MonoPriority
@@ -51,7 +52,7 @@ class Top(Elaboratable):
         seg7_pins = platform.request('seg7')
 
         m = Module()
-        uart_rx = UARTRx(divisor=uart_divisor)
+        uart_rx = P_UARTRx(divisor=uart_divisor)
         recv_status = OneShot(duration=status_duration)
         err_status = OneShot(duration=status_duration)
         midi_decode = MIDIDecoder()
@@ -62,14 +63,15 @@ class Top(Elaboratable):
         m.submodules += [uart_rx, recv_status, err_status]
         m.submodules += [midi_decode, pri]
         m.submodules += [ones_segs, tens_segs, driver]
+        m.submodules += Pipeline([uart_rx, midi_decode])
         m.d.comb += [
             uart_rx.rx_pin.eq(uart_pins.rx),
             good_led.eq(recv_status.out),
             recv_status.trg.eq(midi_decode.note_on_rdy),
             err_status.trg.eq(midi_decode.note_off_rdy),
             bad_led.eq(err_status.out),
-            midi_decode.serial_data.eq(uart_rx.rx_data),
-            midi_decode.serial_rdy.eq(uart_rx.rx_rdy),
+            # midi_decode.serial_data.eq(uart_rx.rx_data),
+            # midi_decode.serial_rdy.eq(uart_rx.rx_rdy),
             pri.note_on_rdy.eq(midi_decode.note_on_rdy),
             pri.note_off_rdy.eq(midi_decode.note_off_rdy),
             pri.note_chan.eq(midi_decode.note_chan),

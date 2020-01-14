@@ -52,7 +52,7 @@ class MonoPriority(Elaboratable):
                 velocity.eq(64),
             ]
 
-        Assert (~self.note_on_rdy | ~self.note_off_rdy)
+        Assume (~self.note_on_rdy | ~self.note_off_rdy)
         with m.If(self.note_on_rdy & channel_ok):
             m.d.sync += [
                 self.mono_gate.eq(True),

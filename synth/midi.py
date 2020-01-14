@@ -2,22 +2,34 @@
 
 from nmigen import *
 from nmigen.asserts import *
-from nmigen_lib.util import delay
-from nmigen_lib.util.main import Main
+
+from nmigen_lib.pipe import PipeSpec
+from nmigen_lib.util import Main, delay
+
+
+note_onoff_spec = PipeSpec((
+    ('chan', unsigned(4)),
+    ('key', unsigned(7)),
+    ('vel', unsigned(7)),
+))
+
 
 class MIDIDecoder(Elaboratable):
 
     def __init__(self):
-        self.serial_data = Signal(8)
-        self.serial_rdy = Signal()
+        self.serial_outlet = PipeSpec(8).outlet()
+        # self.note_on_inlet = note_onoff_spec.inlet()
+        # self.note_off_inlet = note_onoff_spec.inlet()
+        # self.serial_data = Signal(8)
+        # self.serial_rdy = Signal()
         self.note_on_rdy = Signal()
         self.note_off_rdy = Signal()
         self.note_chan = Signal(4)
         self.note_key = Signal(7)
         self.note_vel = Signal(7)
-        self.ports = [sig
-                      for sig in self.__dict__.values()
-                      if isinstance(sig, Signal)]
+        # self.ports = [sig
+        #               for sig in self.__dict__.values()
+        #               if isinstance(sig, Signal)]
 
     def elaborate(self, platform):
 
@@ -42,6 +54,9 @@ class MIDIDecoder(Elaboratable):
             return byte[3:8] == 0b11110
             # return (byte & 0xF8) == 0xF0
 
+        i_data = self.serial_outlet.i_data
+        # note_off_data = self.note_off_inlet.o_data
+        # note_on_data = self.note_on_inlet.o_data
         status_byte = Signal(8)
         status_valid = Signal()
         data_last = Signal()
@@ -49,26 +64,32 @@ class MIDIDecoder(Elaboratable):
         data_byte_1 = Signal(8)
 
         m = Module()
+        m.d.comb += [
+            self.serial_outlet.o_ready.eq(True),
+        ]
         m.d.sync += [
             self.note_on_rdy.eq(False),
             self.note_off_rdy.eq(False),
+            # self.note_on_inlet.o_valid.eq(False),
+            # self.note_off_inlet.o_valid.eq(False),
         ]
-        with m.If(self.serial_rdy):
-            with m.If(is_message_start(self.serial_data)):
-                with m.If(is_voice_status(self.serial_data)):
+        # with m.If(self.serial_rdy):
+        with m.If(self.serial_outlet.received()):
+            with m.If(is_message_start(i_data)):
+                with m.If(is_voice_status(i_data)):
                     m.d.sync += [
-                        status_byte.eq(self.serial_data),
+                        status_byte.eq(i_data),
                         status_valid.eq(True),
                     ]
-                    with m.If(is_note_off(self.serial_data)):
+                    with m.If(is_note_off(i_data)):
                         m.d.sync += [
                             data_last.eq(1),
                         ]
-                    with m.If(is_note_on(self.serial_data)):
+                    with m.If(is_note_on(i_data)):
                         m.d.sync += [
                             data_last.eq(1),
                         ]
-                with m.Elif(is_system_common_status(self.serial_data)):
+                with m.Elif(is_system_common_status(i_data)):
                     m.d.sync += [
                         status_valid.eq(False),
                      ]
@@ -78,7 +99,7 @@ class MIDIDecoder(Elaboratable):
                     with m.If((data_index == 0) & (data_last == 1)):
                         # First data byte of three-byte message
                         m.d.sync += [
-                            data_byte_1.eq(self.serial_data),
+                            data_byte_1.eq(i_data),
                             data_index.eq(1),
                         ]
                     with m.Elif((data_index == 1) & (data_last == 1)):
@@ -87,13 +108,17 @@ class MIDIDecoder(Elaboratable):
                         m.d.sync += [
                             data_index.eq(0),
                         ]
+                        # # Or ...
+                        # channel = status_byte[:4]
+                        # key = data_byte_1[:7]
+                        # velocity = i_data[:7]
                         channel = Signal(4)
                         key = Signal(7)
                         velocity = Signal(7)
                         m.d.comb += [
                             channel.eq(status_byte[:4]),
                             key.eq(data_byte_1[:7]),
-                            velocity.eq(self.serial_data[:7]),
+                            velocity.eq(i_data[:7]),
                         ]
 
                         with m.If(is_note_off(status_byte)):
@@ -102,6 +127,10 @@ class MIDIDecoder(Elaboratable):
                                 self.note_chan.eq(channel),
                                 self.note_key.eq(key),
                                 self.note_vel.eq(velocity),
+                                # self.note_off_inlet.o_valid.eq(True),
+                                # note_off_data.chan.eq(channel),
+                                # note_off_data.key.eq(key),
+                                # note_off_data.vel.eq(velocity),
                             ]
                         with m.If(is_note_on(status_byte)):
                             m.d.sync += [
@@ -120,7 +149,19 @@ class MIDIDecoder(Elaboratable):
 
 if __name__ == '__main__':
     design = MIDIDecoder()
-    with Main(design).sim as sim:
+
+    # Workaround nMigen issue #280
+    m = Module()
+    m.submodules.design = design
+    i_valid = Signal()
+    i_data = Signal(8)
+    m.d.comb += [
+        design.serial_outlet.i_valid.eq(i_valid),
+        design.serial_outlet.i_data.eq(i_data),
+    ]
+
+    #280 with Main(design).sim as sim:
+    with Main(m).sim as sim:
         @sim.sync_process
         def data_source():
             class Pause: pass
@@ -136,9 +177,15 @@ if __name__ == '__main__':
                 if d is Pause:
                     yield from delay(5)
                 else:
-                    yield design.serial_data.eq(d)
-                    yield design.serial_rdy.eq(True)
+                    # yield design.serial_data.eq(d)
+                    # yield design.serial_rdy.eq(True)
+                    #280 yield design.serial_outlet.i_data.eq(d)
+                    #280 yield design.serial_outlet.i_valid.eq(True)
+                    yield i_data.eq(d)
+                    yield i_valid.eq(True)
                     yield
-                    yield design.serial_rdy.eq(False)
+                    # yield design.serial_rdy.eq(False)
+                    #280 yield design.serial_outlet.i_valid.eq(False)
+                    yield i_valid.eq(False)
                     yield from delay(i % 3)
             yield from delay(2)
