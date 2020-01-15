@@ -2,7 +2,7 @@
 
 from collections import namedtuple
 
-from nmigen import *
+from nmigen import Elaboratable, Module, Signal, unsigned
 from nmigen.asserts import Assert
 from nmigen.back.pysim import Passive
 

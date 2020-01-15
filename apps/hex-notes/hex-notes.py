@@ -57,8 +57,8 @@ class Top(Elaboratable):
         err_status = OneShot(duration=status_duration)
         midi_decode = MIDIDecoder()
         pri = MonoPriority()
-        pri.voice_note_inlet.leave_unconnected()
-        pri.voice_gate_inlet.leave_unconnected()
+        pri.voice_note_out.leave_unconnected()
+        pri.voice_gate_out.leave_unconnected()
         ones_segs = DigitPattern()
         tens_segs = DigitPattern()
         driver = SevenSegDriver(clk_freq, 100, 1)
@@ -81,9 +81,9 @@ class Top(Elaboratable):
             err_status.trg.eq(note_valid & ~note_on),
             good_led.eq(recv_status.out),
             bad_led.eq(err_status.out),
-            ones_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[:4]),
-            tens_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[4:]),
-            driver.pwm.eq(pri.voice_gate_inlet.o_data.gate),
+            ones_segs.digit_in.eq(pri.voice_note_out.o_data.note[:4]),
+            tens_segs.digit_in.eq(pri.voice_note_out.o_data.note[4:]),
+            driver.pwm.eq(pri.voice_gate_out.o_data.gate),
             driver.segment_patterns[0].eq(ones_segs.segments_out),
             driver.segment_patterns[1].eq(tens_segs.segments_out),
             seg7_pins.eq(driver.seg7),

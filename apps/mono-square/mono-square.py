@@ -117,10 +117,10 @@ class Top(Elaboratable):
             err_status.trg.eq(note_valid & ~note_on),
             bad_led.eq(err_status.out),
 
-            ones_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[:4]),
-            tens_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[4:]),
+            ones_segs.digit_in.eq(pri.voice_note_out.o_data.note[:4]),
+            tens_segs.digit_in.eq(pri.voice_note_out.o_data.note[4:]),
 
-            seg7_out.pwm.eq(pri.voice_gate_inlet.o_data.gate),
+            seg7_out.pwm.eq(pri.voice_gate_out.o_data.gate),
             seg7_out.segment_patterns[0].eq(ones_segs.segments_out),
             seg7_out.segment_patterns[1].eq(tens_segs.segments_out),
 
