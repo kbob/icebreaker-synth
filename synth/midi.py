@@ -21,13 +21,8 @@ note_msg_spec = PipeSpec((
 class MIDIDecoder(Elaboratable):
 
     def __init__(self):
-        self.serial_outlet = PipeSpec(8).outlet()
-        self.note_msg_inlet = note_msg_spec.inlet()
-        # self.note_on_rdy = Signal()
-        # self.note_off_rdy = Signal()
-        # self.note_chan = Signal(4)
-        # self.note_key = Signal(7)
-        # self.note_vel = Signal(7)
+        self.serial_in = PipeSpec(8).outlet()
+        self.note_msg_out = note_msg_spec.inlet()
 
     def elaborate(self, platform):
 
@@ -71,9 +66,9 @@ class MIDIDecoder(Elaboratable):
             # System Commmon Category: 0xF0 - 0xF7
             return byte[3:8] == 0b11110
 
-        i_data = self.serial_outlet.i_data
-        o_note = self.note_msg_inlet.o_data
-        o_note_valid = self.note_msg_inlet.o_valid
+        i_data = self.serial_in.i_data
+        o_note = self.note_msg_out.o_data
+        o_note_valid = self.note_msg_out.o_valid
         status_byte = Signal(8)
         status_valid = Signal()
         data_last = Signal()
@@ -82,15 +77,13 @@ class MIDIDecoder(Elaboratable):
 
         m = Module()
         m.d.comb += [
-            self.serial_outlet.o_ready.eq(True),
+            self.serial_in.o_ready.eq(True),
         ]
-        with m.If(self.note_msg_inlet.sent()):
+        with m.If(self.note_msg_out.sent()):
             m.d.sync += [
-                # self.note_on_rdy.eq(False),
-                # self.note_off_rdy.eq(False),
                 o_note_valid.eq(False),
             ]
-        with m.If(self.serial_outlet.received()):
+        with m.If(self.serial_in.received()):
             with m.If(is_message_start(i_data)):
                 with m.If(is_voice_status(i_data)):
                     m.d.sync += [
@@ -151,10 +144,6 @@ class MIDIDecoder(Elaboratable):
 
                         with m.If(is_note_off(status_byte)):
                             m.d.sync += [
-                                # self.note_off_rdy.eq(True),
-                                # self.note_chan.eq(channel),
-                                # self.note_key.eq(key),
-                                # self.note_vel.eq(velocity),
                                 o_note_valid.eq(True),
                                 o_note.onoff.eq(False),
                                 o_note.channel.eq(channel),
@@ -163,11 +152,6 @@ class MIDIDecoder(Elaboratable):
                             ]
                         with m.If(is_note_on(status_byte)):
                             m.d.sync += [
-                                # self.note_on_rdy.eq(velocity != 0),
-                                # self.note_off_rdy.eq(velocity == 0),
-                                # self.note_chan.eq(channel),
-                                # self.note_key.eq(key),
-                                # self.note_vel.eq(velocity),
                                 o_note_valid.eq(True),
                                 o_note.onoff.eq(velocity != 0),
                                 o_note.channel.eq(channel),
@@ -183,6 +167,8 @@ class MIDIDecoder(Elaboratable):
 
 if __name__ == '__main__':
     design = MIDIDecoder()
+    design.serial_in.leave_unconnected()
+    design.note_msg_out.leave_unconnected()
 
     # Workaround nMigen issue #280
     m = Module()
@@ -191,9 +177,9 @@ if __name__ == '__main__':
     i_data = Signal(8)
     i_note_ready = Signal()
     m.d.comb += [
-        design.serial_outlet.i_valid.eq(i_valid),
-        design.serial_outlet.i_data.eq(i_data),
-        design.note_msg_inlet.i_ready.eq(i_note_ready),
+        design.serial_in.i_valid.eq(i_valid),
+        design.serial_in.i_data.eq(i_data),
+        design.note_msg_out.i_ready.eq(i_note_ready),
     ]
 
     #280 with Main(design).sim as sim:
@@ -213,12 +199,12 @@ if __name__ == '__main__':
                 if d is Pause:
                     yield from delay(5)
                 else:
-                    #280 yield design.serial_outlet.i_data.eq(d)
-                    #280 yield design.serial_outlet.i_valid.eq(True)
+                    #280 yield design.serial_in.i_data.eq(d)
+                    #280 yield design.serial_in.i_valid.eq(True)
                     yield i_data.eq(d)
                     yield i_valid.eq(True)
                     yield
-                    #280 yield design.serial_outlet.i_valid.eq(False)
+                    #280 yield design.serial_in.i_valid.eq(False)
                     yield i_valid.eq(False)
                     yield from delay(i % 3)
             yield from delay(5)
@@ -237,7 +223,7 @@ if __name__ == '__main__':
             #280
             yield i_note_ready.eq(False)
             while True:
-                valid = yield design.note_msg_inlet.o_valid
+                valid = yield design.note_msg_out.o_valid
                 #280
                 ready = yield i_note_ready
                 if valid and not ready:
@@ -248,10 +234,10 @@ if __name__ == '__main__':
                     #280
                     yield i_note_ready.eq(False)
                     actual = NoteMsg(
-                        (yield design.note_msg_inlet.o_data.onoff),
-                        (yield design.note_msg_inlet.o_data.channel),
-                        (yield design.note_msg_inlet.o_data.note),
-                        (yield design.note_msg_inlet.o_data.velocity),
+                        (yield design.note_msg_out.o_data.onoff),
+                        (yield design.note_msg_out.o_data.channel),
+                        (yield design.note_msg_out.o_data.note),
+                        (yield design.note_msg_out.o_data.velocity),
                     )
                     assert expected_index < len(expected)
                     assert actual == expected[expected_index], (

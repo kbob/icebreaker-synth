@@ -100,8 +100,8 @@ class Top(Elaboratable):
         m.submodules.gate_pipe = Pipeline([pri, gate])
         m.submodules.sample_pipe = Pipeline([gate, i2s_tx])
 
-        note_valid = midi_decode.note_msg_inlet.o_valid
-        note_on = midi_decode.note_msg_inlet.o_data.onoff
+        note_valid = midi_decode.note_msg_out.o_valid
+        note_on = midi_decode.note_msg_out.o_data.onoff
         osc_stereo = Cat(osc.pulse_inlet.o_data, osc.saw_inlet.o_data)
 
         m.d.comb += [
@@ -126,7 +126,6 @@ class Top(Elaboratable):
 
             seg7_pins.eq(seg7_out.seg7),
 
-            # gate.signal_in.eq(osc_stereo),
             gate.signal_outlet.i_valid.eq(osc.pulse_inlet.o_valid),
             gate.signal_outlet.i_data.eq(osc_stereo),
             osc.pulse_inlet.i_ready.eq(gate.signal_outlet.o_ready),
