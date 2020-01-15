@@ -75,9 +75,12 @@ class Top(Elaboratable):
         pri.voice_note_inlet.leave_unconnected()
         ones_segs = DigitPattern()
         tens_segs = DigitPattern()
-        driver = SevenSegDriver(clk_freq, 100, 1)
+        seg7_out = SevenSegDriver(clk_freq, 100, 1)
         osc = Oscillator(cfg)
+        osc.pulse_inlet.leave_unconnected()
+        osc.saw_inlet.leave_unconnected()
         gate = Gate(stereo_sample_spec(cfg.osc_depth))
+        gate.signal_outlet.leave_unconnected()
         i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
         m.domains += pll.domain # This switches the default clk domain
                                 # to the PLL-generated domain for Top
@@ -90,7 +93,7 @@ class Top(Elaboratable):
         m.submodules.err_status = err_status
         m.submodules.ones_segs = ones_segs
         m.submodules.tens_segs = tens_segs
-        m.submodules.driver = driver
+        m.submodules.seg7_out = seg7_out
         m.submodules.osc = osc
         m.submodules.gate = gate
         m.submodules.i2s_tx = i2s_tx
@@ -100,6 +103,7 @@ class Top(Elaboratable):
 
         note_valid = midi_decode.note_msg_inlet.o_valid
         note_on = midi_decode.note_msg_inlet.o_data.onoff
+        osc_stereo = Cat(osc.pulse_inlet.o_data, osc.saw_inlet.o_data)
 
         m.d.comb += [
             pll.clk_pin.eq(clk_pin),
@@ -117,16 +121,20 @@ class Top(Elaboratable):
             ones_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[:4]),
             tens_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[4:]),
 
-            driver.pwm.eq(pri.voice_gate_inlet.o_data.gate),
-            driver.segment_patterns[0].eq(ones_segs.segments_out),
-            driver.segment_patterns[1].eq(tens_segs.segments_out),
+            seg7_out.pwm.eq(pri.voice_gate_inlet.o_data.gate),
+            seg7_out.segment_patterns[0].eq(ones_segs.segments_out),
+            seg7_out.segment_patterns[1].eq(tens_segs.segments_out),
 
-            seg7_pins.eq(driver.seg7),
+            seg7_pins.eq(seg7_out.seg7),
 
             osc.sync_in.eq(False),
             osc.note_in.eq(pri.voice_note_inlet.o_data.note),
 
-            gate.signal_in.eq(Cat(osc.pulse_out, osc.saw_out)),
+            # gate.signal_in.eq(osc_stereo),
+            gate.signal_outlet.i_valid.eq(osc.pulse_inlet.o_valid),
+            gate.signal_outlet.i_data.eq(osc_stereo),
+            osc.pulse_inlet.i_ready.eq(gate.signal_outlet.o_ready),
+            osc.saw_inlet.i_ready.eq(gate.signal_outlet.o_ready),
 
             i2s_pins.eq(i2s_tx.tx_i2s),
         ]

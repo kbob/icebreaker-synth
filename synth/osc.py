@@ -1,13 +1,22 @@
 #!/usr/bin/env nmigen
 
-from enum import Enum, IntEnum, auto
+from enum import Enum, auto
 from math import ceil, log2
 
-from nmigen import *
+from nmigen import Array, Cat, Const, Elaboratable, Module, Mux, Signal
+from nmigen import signed, unsigned
+from nmigen.back.pysim import Passive
 
+from nmigen_lib.pipe import PipeSpec
 from nmigen_lib.util import Main, delay
+
 from synth.config import SynthConfig
 from synth.util import MIDI_note_to_freq
+
+
+def mono_sample_spec(width):
+    return PipeSpec(signed(width))
+
 
 MIDI_NOTES = 128
 STEPS = 12 # per octave
@@ -31,53 +40,16 @@ def mul12(n):
 
 assert all(mul12(n) == 12 * n for n in range(OCTAVES))
 
-# if counter [-1]:
-#     counter = MAX
-# else:
-#     counter -= 1
-# FSM:
-#     Step IDLE:
-#         rdy_out = False
-#         if counter[-1]:
-#             latch inputs.
-#             octave = note_in // 12
-#             next = MODULUS
-#
-#     Step MODULUS
-#         step = note - 12 * octave
-#         inv_octave = 10 - octave
-#         next = LOOKUP
-#
-#     Step LOOKUP:
-#         get base inc from table
-#         next = MODULATE
-#
-#     Step MODULATE:
-#         multiply base inc. by modulation.
-#         next = SHIFT
-#
-#     Step SHIFT:
-#         inc = (base_inc << octave)[-self.shift:]
-#         next = ADD
-#
-#     Step ADD:
-#         phase += inc
-#         next = EMIT
-#
-#     Step EMIT:
-#        calc saw_out = 32767 - acc
-#        calc pulse_out = pulse_up ? +32767 : -32767
-#        rdy_out = True
-#        next = IDLE
 
 class FSM(Enum):
-    IDLE     = auto(),
-    MODULUS  = auto(),
-    LOOKUP   = auto(),
-    MODULATE = auto(),
-    SHIFT    = auto(),
-    ADD      = auto(),
-    EMIT     = auto(),
+    START    = auto()
+    MODULUS  = auto()
+    LOOKUP   = auto()
+    MODULATE = auto()
+    SHIFT    = auto()
+    ADD      = auto()
+    SAMPLE   = auto()
+    EMIT     = auto()
 
 
 class Oscillator(Elaboratable):
@@ -91,9 +63,8 @@ class Oscillator(Elaboratable):
         self.mod_in = Signal(signed(16))
         self.pw_in = Signal(7, reset=~0)
 
-        self.rdy_out = Signal()
-        self.pulse_out = Signal(signed(config.osc_depth))
-        self.saw_out = Signal(signed(config.osc_depth))
+        self.pulse_inlet = mono_sample_spec(config.osc_depth).inlet()
+        self.saw_inlet = mono_sample_spec(config.osc_depth).inlet()
 
     def _calc_params(self, config):
 
@@ -161,9 +132,12 @@ class Oscillator(Elaboratable):
         self.inc_depth = max_fdepth
         self.shift = shift
         self._base_incs = [int(i) for i in incs]
+        # print(f'osc: phase_depth = {self.phase_depth}')
+        # print(f'     inc_depth = {self.inc_depth}')
+        # print(f'     shift = {self.shift}')
+
 
     def elaborate(self, platform):
-        tick = Signal(range(-1, self.divisor - 1))
         phase = Signal(self.phase_depth)
         note = Signal.like(self.note_in)
         mod = Signal.like(self.mod_in)
@@ -174,20 +148,14 @@ class Oscillator(Elaboratable):
         step_incs = Array([Signal.like(base_inc, reset=inc)
                            for inc in self._base_incs])
         inc = Signal.like(phase)
+        pulse_sample = Signal.like(self.pulse_inlet.o_data)
+        saw_sample = Signal.like(self.saw_inlet.o_data)
 
         m = Module()
         with m.If(self.sync_in):
             m.d.sync += [
                 phase.eq(0),
-                self.rdy_out.eq(False),
-            ]
-        with m.Elif(tick[-1]):
-            m.d.sync += [
-                tick.eq(self.divisor - 2),
-            ]
-        with m.Else():
-            m.d.sync += [
-                tick.eq(tick - 1),
+                # self.rdy_out.eq(False),
             ]
 
         # Calculate pulse wave edges.  The pulse must rise and fall
@@ -211,18 +179,14 @@ class Oscillator(Elaboratable):
 
         with m.FSM():
 
-            with m.State(FSM.IDLE):
+            with m.State(FSM.START):
                 m.d.sync += [
-                    self.rdy_out.eq(False),
+                    note.eq(self.note_in),
+                    mod.eq(self.mod_in),
+                    pw.eq(self.pw_in),
+                    octave.eq(div12(self.note_in)),
                 ]
-                with m.If(tick[-1]):
-                    m.d.sync += [
-                        note.eq(self.note_in),
-                        mod.eq(self.mod_in),
-                        pw.eq(self.pw_in),
-                        octave.eq(div12(self.note_in)),
-                    ]
-                    m.next = FSM.MODULUS
+                m.next = FSM.MODULUS
 
             with m.State(FSM.MODULUS):
                 m.d.sync += [
@@ -251,33 +215,69 @@ class Oscillator(Elaboratable):
                 m.d.sync += [
                     phase.eq(phase + inc),
                 ]
+                m.next = FSM.SAMPLE
+
+            with m.State(FSM.SAMPLE):
+                samp_depth = self.saw_inlet.o_data.shape()[0]
+                samp_max = 2**(samp_depth - 1) - 1
+                m.d.sync += [
+                    pulse_sample.eq(Mux(pulse_up, samp_max, -samp_max)),
+                    saw_sample.eq(samp_max - phase[-samp_depth:]),
+                ]
                 m.next = FSM.EMIT
 
             with m.State(FSM.EMIT):
-                samp_max = 2**(self.saw_out.shape()[0] - 1) - 1
-                pw8 = Cat(pw, Const(0, unsigned(1)))
-                m.d.sync += [
-                    self.saw_out.eq(samp_max - phase[-self.inc_depth:]),
-                    self.pulse_out.eq(Mux(pulse_up, samp_max, -samp_max)),
-                    self.rdy_out.eq(True),
-                ]
-                m.next = FSM.IDLE
+                with m.If(self.saw_inlet.i_ready & self.pulse_inlet.i_ready):
+                    m.d.sync += [
+                        self.pulse_inlet.o_valid.eq(True),
+                        self.pulse_inlet.o_data.eq(pulse_sample),
+                        self.saw_inlet.o_valid.eq(True),
+                        self.saw_inlet.o_data.eq(saw_sample),
+                    ]
+                    m.next = FSM.START
 
+        with m.If(self.pulse_inlet.sent()):
+            m.d.sync += [
+                self.pulse_inlet.o_valid.eq(False),
+            ]
+        with m.If(self.saw_inlet.sent()):
+            m.d.sync += [
+                self.saw_inlet.o_valid.eq(False),
+            ]
         return m
 
 
 if __name__ == '__main__':
     divisor = 25
     cfg = SynthConfig(1_000_000, divisor)
+    cfg.describe()
     design = Oscillator(cfg)
+    design.pulse_inlet.leave_unconnected()
+    design.saw_inlet.leave_unconnected()
+
     with Main(design).sim as sim:
         @sim.sync_process
         def note_proc():
             # from C5 to C7 by major thirds:
             for note in range(60 + 12, 60 + 36 + 1, 4):
+                pw = (50 * note - 360) % 128
+                print(f'note = {note}, pw = {pw}')
                 for _ in range(200):
                     yield design.note_in.eq(note)
-                    yield design.pw_in.eq(50 * note - 360)
+                    yield design.pw_in.eq(pw)
                     yield
                     yield design.sync_in.eq(0)
                     yield from delay(divisor - 1)
+
+        @sim.sync_process
+        def tick_proc():
+            yield Passive()
+            while True:
+                yield design.pulse_inlet.i_ready.eq(True)
+                yield design.saw_inlet.i_ready.eq(True)
+                for i in range(cfg.osc_divisor):
+                    yield
+                    if (yield design.pulse_inlet.o_valid):
+                        yield design.pulse_inlet.i_ready.eq(False)
+                    if (yield design.saw_inlet.o_valid):
+                        yield design.saw_inlet.i_ready.eq(False)
