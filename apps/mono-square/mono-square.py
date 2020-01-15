@@ -72,7 +72,6 @@ class Top(Elaboratable):
         err_status = OneShot(duration=status_duration)
         midi_decode = MIDIDecoder()
         pri = MonoPriority()
-        pri.voice_note_inlet.leave_unconnected()
         ones_segs = DigitPattern()
         tens_segs = DigitPattern()
         seg7_out = SevenSegDriver(clk_freq, 100, 1)
@@ -97,7 +96,7 @@ class Top(Elaboratable):
         m.submodules.osc = osc
         m.submodules.gate = gate
         m.submodules.i2s_tx = i2s_tx
-        m.submodules.event_pipe = Pipeline([uart_rx, midi_decode, pri])
+        m.submodules.event_pipe = Pipeline([uart_rx, midi_decode, pri, osc])
         m.submodules.gate_pipe = Pipeline([pri, gate])
         m.submodules.sample_pipe = Pipeline([gate, i2s_tx])
 
@@ -126,9 +125,6 @@ class Top(Elaboratable):
             seg7_out.segment_patterns[1].eq(tens_segs.segments_out),
 
             seg7_pins.eq(seg7_out.seg7),
-
-            osc.sync_in.eq(False),
-            osc.note_in.eq(pri.voice_note_inlet.o_data.note),
 
             # gate.signal_in.eq(osc_stereo),
             gate.signal_outlet.i_valid.eq(osc.pulse_inlet.o_valid),

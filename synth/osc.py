@@ -11,6 +11,7 @@ from nmigen_lib.pipe import PipeSpec
 from nmigen_lib.util import Main, delay
 
 from synth.config import SynthConfig
+from synth.priority import voice_note_spec
 from synth.util import MIDI_note_to_freq
 
 
@@ -59,10 +60,11 @@ class Oscillator(Elaboratable):
         self._calc_params(config)
 
         self.sync_in = Signal()
-        self.note_in = Signal(range(MIDI_NOTES))
+        # self.note_in = Signal(range(MIDI_NOTES))
         self.mod_in = Signal(signed(16))
         self.pw_in = Signal(7, reset=~0)
 
+        self.note_outlet = voice_note_spec.outlet()
         self.pulse_inlet = mono_sample_spec(config.osc_depth).inlet()
         self.saw_inlet = mono_sample_spec(config.osc_depth).inlet()
 
@@ -139,7 +141,7 @@ class Oscillator(Elaboratable):
 
     def elaborate(self, platform):
         phase = Signal(self.phase_depth)
-        note = Signal.like(self.note_in)
+        note = Signal.like(self.note_outlet.i_data.note)
         mod = Signal.like(self.mod_in)
         pw = Signal.like(self.pw_in)
         octave = Signal(range(OCTAVES))
@@ -158,6 +160,14 @@ class Oscillator(Elaboratable):
                 # self.rdy_out.eq(False),
             ]
 
+        m.d.comb += [
+            self.note_outlet.o_ready.eq(True),
+        ]
+        with m.If(self.note_outlet.received()):
+            m.d.sync += [
+                note.eq(self.note_outlet.i_data.note),
+                octave.eq(div12(self.note_outlet.i_data.note)),
+            ]
         # Calculate pulse wave edges.  The pulse must rise and fall
         # exactly once per cycle.
         prev_msb = Signal()
@@ -181,10 +191,10 @@ class Oscillator(Elaboratable):
 
             with m.State(FSM.START):
                 m.d.sync += [
-                    note.eq(self.note_in),
+                    # note.eq(self.note_in),
                     mod.eq(self.mod_in),
                     pw.eq(self.pw_in),
-                    octave.eq(div12(self.note_in)),
+                    # octave.eq(div12(self.note_in)),
                 ]
                 m.next = FSM.MODULUS
 
@@ -252,6 +262,7 @@ if __name__ == '__main__':
     cfg = SynthConfig(1_000_000, divisor)
     cfg.describe()
     design = Oscillator(cfg)
+    design.note_outlet.leave_unconnected()
     design.pulse_inlet.leave_unconnected()
     design.saw_inlet.leave_unconnected()
 
@@ -262,12 +273,13 @@ if __name__ == '__main__':
             for note in range(60 + 12, 60 + 36 + 1, 4):
                 pw = (50 * note - 360) % 128
                 print(f'note = {note}, pw = {pw}')
+                yield design.pw_in.eq(pw)
+                yield design.note_outlet.i_valid.eq(True)
+                yield design.note_outlet.i_data.note.eq(note)
                 for _ in range(200):
-                    yield design.note_in.eq(note)
-                    yield design.pw_in.eq(pw)
                     yield
-                    yield design.sync_in.eq(0)
                     yield from delay(divisor - 1)
+                    yield design.note_outlet.i_valid.eq(False)
 
         @sim.sync_process
         def tick_proc():
