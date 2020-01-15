@@ -1,17 +1,18 @@
 #!/usr/bin/env nmigen
 
-from nmigen import Elaboratable, Module, Signal, signed
+from nmigen import Cat, Elaboratable, Module, Signal, unsigned
 from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
-from nmigen_lib import PLL, UARTRx
+from nmigen_lib import PLL
 from nmigen_lib.pipe import Pipeline
 from nmigen_lib.pipe.uart import P_UARTRx
 from nmigen_lib.seven_segment.digit_pattern import DigitPattern
 from nmigen_lib.seven_segment.driver import SevenSegDriver
-from synth import Gate, I2STx, MIDIDecoder, MonoPriority
-from synth import Oscillator, SynthConfig
+
+from synth import Gate, P_I2STx, MIDIDecoder, MonoPriority
+from synth import Oscillator, SynthConfig, stereo_sample_spec
 
 
 class OneShot(Elaboratable):
@@ -71,13 +72,13 @@ class Top(Elaboratable):
         err_status = OneShot(duration=status_duration)
         midi_decode = MIDIDecoder()
         pri = MonoPriority()
+        pri.voice_note_inlet.leave_unconnected()
         ones_segs = DigitPattern()
         tens_segs = DigitPattern()
         driver = SevenSegDriver(clk_freq, 100, 1)
         osc = Oscillator(cfg)
-        gate0 = Gate(signed(cfg.osc_depth)) # Left channel
-        gate1 = Gate(signed(cfg.osc_depth)) # Right channel
-        i2s_tx = I2STx(clk_freq, cfg.out_rate)
+        gate = Gate(stereo_sample_spec(cfg.osc_depth))
+        i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
         m.domains += pll.domain # This switches the default clk domain
                                 # to the PLL-generated domain for Top
                                 # and all submodules.
@@ -91,10 +92,11 @@ class Top(Elaboratable):
         m.submodules.tens_segs = tens_segs
         m.submodules.driver = driver
         m.submodules.osc = osc
-        m.submodules.gate0 = gate0
-        m.submodules.gate1 = gate1
+        m.submodules.gate = gate
         m.submodules.i2s_tx = i2s_tx
-        m.submodules.audio_pipeline = Pipeline([uart_rx, midi_decode, pri])
+        m.submodules.event_pipe = Pipeline([uart_rx, midi_decode, pri])
+        m.submodules.gate_pipe = Pipeline([pri, gate])
+        m.submodules.sample_pipe = Pipeline([gate, i2s_tx])
 
         note_valid = midi_decode.note_msg_inlet.o_valid
         note_on = midi_decode.note_msg_inlet.o_data.onoff
@@ -112,26 +114,19 @@ class Top(Elaboratable):
             err_status.trg.eq(note_valid & ~note_on),
             bad_led.eq(err_status.out),
 
-            ones_segs.digit_in.eq(pri.mono_note[:4]),
-            tens_segs.digit_in.eq(pri.mono_note[4:]),
+            ones_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[:4]),
+            tens_segs.digit_in.eq(pri.voice_note_inlet.o_data.note[4:]),
 
-            driver.pwm.eq(pri.mono_gate),
+            driver.pwm.eq(pri.voice_gate_inlet.o_data.gate),
             driver.segment_patterns[0].eq(ones_segs.segments_out),
             driver.segment_patterns[1].eq(tens_segs.segments_out),
 
             seg7_pins.eq(driver.seg7),
 
             osc.sync_in.eq(False),
-            osc.note_in.eq(pri.mono_note),
+            osc.note_in.eq(pri.voice_note_inlet.o_data.note),
 
-            gate0.signal_in.eq(osc.pulse_out),
-            gate1.signal_in.eq(osc.saw_out),
-            gate0.gate_in.eq(pri.mono_gate),
-            gate1.gate_in.eq(pri.mono_gate),
-
-            i2s_tx.tx_stb.eq(True),
-            i2s_tx.tx_samples[0].eq(gate0.signal_out),
-            i2s_tx.tx_samples[1].eq(gate1.signal_out),
+            gate.signal_in.eq(Cat(osc.pulse_out, osc.saw_out)),
 
             i2s_pins.eq(i2s_tx.tx_i2s),
         ]

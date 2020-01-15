@@ -1,10 +1,10 @@
 #!/usr/bin/env nmigen
 
-from math import log2
-from numbers import Complex
-
-from nmigen import *
+from nmigen import Array, Cat, Const, Elaboratable, Module, Mux, Record
+from nmigen import Signal, signed
 from nmigen.build import Resource
+
+from nmigen_lib.pipe import PipeSpec
 from nmigen_lib.util import Main, delay
 
 
@@ -18,6 +18,14 @@ def I2STxRecord():
 
 def I2SRxRecord():
     raise NotImplementedError()
+
+
+def stereo_sample_spec(width=16):
+    return PipeSpec((
+        ('left', signed(width)),
+        ('right', signed(width)),
+    ))
+
 
 def PmodI2STxResource(name, number, *, pmod, extras=None):
     return Resource(name, number,
@@ -66,6 +74,40 @@ class I2S(Elaboratable):
 
             # RX signals not connected.  TBD.
         ]
+        return m
+
+
+class P_I2STx(Elaboratable):
+
+    def __init__(self, clk_freq, tx_rate, tx_depth=16):
+        self.clk_freq = clk_freq
+        self.tx_rate = tx_rate
+        self.tx_depth = tx_depth
+
+        self.sample_outlet = stereo_sample_spec(self.tx_depth).outlet()
+        self.tx_i2s = I2STxRecord()
+
+    def elaborate(self, platform):
+        sample = Record.like(self.sample_outlet.i_data)
+
+        m = Module()
+        i2s_tx = I2STx(self.clk_freq, self.tx_rate, self.tx_depth)
+        m.submodules.i2s_tx = i2s_tx
+        m.d.comb += [
+            i2s_tx.tx_stb.eq(True),
+            i2s_tx.tx_samples[0].eq(sample.left),
+            i2s_tx.tx_samples[1].eq(sample.right),
+            self.tx_i2s.eq(i2s_tx.tx_i2s),
+        ]
+        with m.If(i2s_tx.tx_ack):
+            m.d.sync += [
+                self.sample_outlet.o_ready.eq(True),
+            ]
+        with m.If(self.sample_outlet.received()):
+            m.d.sync += [
+                self.sample_outlet.o_ready.eq(False),
+                sample.eq(self.sample_outlet.i_data),
+            ]
         return m
 
 
@@ -128,16 +170,6 @@ class I2STx(Elaboratable):
         self.tx_stb = Signal()
         self.tx_ack = Signal()
         self.tx_i2s = I2STxRecord()
-        self.ports = [
-            self.tx_samples[0],
-            self.tx_samples[1],
-            self.tx_stb,
-            self.tx_ack,
-            self.tx_i2s.mclk,
-            self.tx_i2s.lrck,
-            self.tx_i2s.sck,
-            self.tx_i2s.sd,
-        ]
 
     def elaborate(self, platform):
         bitstream = Signal(2 * self.tx_depth)
@@ -258,23 +290,52 @@ class I2SRx(Elaboratable):
 
 
 if __name__ == '__main__':
-    design = I2STx(48_000_000, 46_875, tx_depth=16)
+    design = P_I2STx(48_000_000, 46_875, tx_depth=16)
     # design = I2STx(72_000_000, 46_875, tx_depth=24)
     # design = I2STx(48_000_000, 2 * 46_875, tx_depth=16)
     # design = I2STx(72_000_000, 2 * 46_875, tx_depth=24)
     # design = I2STx(48_000_000, 4 * 46_875, tx_depth=16)
     # design = I2STx(72_000_000, 4 * 46_875, tx_depth=24)
-    with Main(design).sim as sim:
+    design.sample_outlet.leave_unconnected()
+
+    # Work around nMigen issue #280
+    m = Module()
+    m.submodules.p_i2s_tx = design
+    i_valid = Signal()
+    i_data = Signal.like(design.sample_outlet.i_data)
+    m.d.comb += [
+        design.sample_outlet.i_valid.eq(i_valid),
+        design.sample_outlet.i_data.eq(i_data),
+    ]
+
+    # 280 with Main(design).sim as sim:
+    with Main(m).sim as sim:
         sim.add_clock(1 / design.clk_freq, domain='sync')
+
+        # # Simulate the non-pipe TX.
+        # @sim.sync_process
+        # def tx_proc():
+        #     left = 0; right = 100
+        #     for i in range(24):
+        #         yield design.tx_samples[0].eq(left)
+        #         yield design.tx_samples[1].eq(right)
+        #         yield design.tx_stb.eq(True)
+        #         left += 3; right += 5
+        #         while (yield design.tx_ack) == False:
+        #             yield
+        #         yield design.tx_stb.eq(False)
+        #         yield
+
+        # Simulate the pipe TX.
         @sim.sync_process
         def tx_proc():
             left = 0; right = 100
+            s = signed(design.tx_depth)
             for i in range(24):
-                yield design.tx_samples[0].eq(left)
-                yield design.tx_samples[1].eq(right)
-                yield design.tx_stb.eq(True)
+                yield i_valid.eq(True)
+                yield i_data.eq(Cat(Const(left, s), Const(right, s)))
                 left += 3; right += 5
-                while (yield design.tx_ack) == False:
+                while (yield design.sample_outlet.o_ready) == False:
                     yield
-                yield design.tx_stb.eq(False)
+                yield i_valid.eq(False)
                 yield

@@ -1,12 +1,22 @@
 #!/usr/bin/env nmigen
 
-from nmigen import *
-from nmigen.asserts import *
+from nmigen import Const, Elaboratable, Module, Signal, unsigned
 
+from nmigen_lib.pipe import PipeSpec
 from nmigen_lib.util.main import Main
 from nmigen_lib.util import delay
 
 from synth.midi import note_msg_spec
+
+
+voice_note_spec = PipeSpec((
+    ('note', unsigned(7)),
+))
+
+voice_gate_spec = PipeSpec((
+    ('gate', unsigned(1)),
+    ('velocity', unsigned(7)),
+))
 
 
 class MonoPriority(Elaboratable):
@@ -21,15 +31,20 @@ class MonoPriority(Elaboratable):
         self.channel = channel
         self.use_velocity = use_velocity
         self.note_outlet = note_msg_spec.outlet()
-        self.mono_gate = Signal()
-        self.mono_note = Signal(7)
-        self.mono_velocity = Signal(7)
+        self.voice_note_inlet = voice_note_spec.inlet()
+        self.voice_gate_inlet = voice_gate_spec.inlet()
 
     def elaborate(self, platform):
         i_onoff = self.note_outlet.i_data.onoff
         i_channel = self.note_outlet.i_data.channel
         i_note = self.note_outlet.i_data.note
         i_velocity = self.note_outlet.i_data.velocity
+
+        o_vn_valid = self.voice_note_inlet.o_valid
+        o_vn_note = self.voice_note_inlet.o_data.note
+        o_vg_valid = self.voice_gate_inlet.o_valid
+        o_vg_gate = self.voice_gate_inlet.o_data.gate
+        o_vg_velocity = self.voice_gate_inlet.o_data.velocity
 
         if self.channel is None:
             channel_ok = True
@@ -49,14 +64,27 @@ class MonoPriority(Elaboratable):
             with m.If(channel_ok):
                 with m.If(i_onoff):
                     m.d.sync += [
-                        self.mono_gate.eq(True),
-                        self.mono_note.eq(i_note),
-                        self.mono_velocity.eq(velocity),
+                        o_vn_valid.eq(True),
+                        o_vn_note.eq(i_note),
+                        o_vg_valid.eq(True),
+                        o_vg_gate.eq(True),
+                        o_vg_velocity.eq(velocity),
                     ]
-                with m.Elif(i_note == self.mono_note):
+                with m.Elif(i_note == o_vn_note):
                     m.d.sync += [
-                        self.mono_gate.eq(False),
+                        o_vg_valid.eq(True),
+                        o_vg_gate.eq(False),
+                        o_vg_velocity.eq(velocity),
                     ]
+        with m.Else():
+            with m.If(self.voice_note_inlet.sent()):
+                m.d.sync += [
+                    o_vn_valid.eq(False),
+                ]
+            with m.If(self.voice_gate_inlet.sent()):
+                m.d.sync += [
+                    o_vg_valid.eq(False),
+                ]
         return m
 
 
