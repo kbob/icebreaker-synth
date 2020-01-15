@@ -64,9 +64,9 @@ class Oscillator(Elaboratable):
         self.mod_in = Signal(signed(16))
         self.pw_in = Signal(7, reset=~0)
 
-        self.note_outlet = voice_note_spec.outlet()
-        self.pulse_inlet = mono_sample_spec(config.osc_depth).inlet()
-        self.saw_inlet = mono_sample_spec(config.osc_depth).inlet()
+        self.note_in = voice_note_spec.outlet()
+        self.pulse_out = mono_sample_spec(config.osc_depth).inlet()
+        self.saw_out = mono_sample_spec(config.osc_depth).inlet()
 
     def _calc_params(self, config):
 
@@ -141,7 +141,7 @@ class Oscillator(Elaboratable):
 
     def elaborate(self, platform):
         phase = Signal(self.phase_depth)
-        note = Signal.like(self.note_outlet.i_data.note)
+        note = Signal.like(self.note_in.i_data.note)
         mod = Signal.like(self.mod_in)
         pw = Signal.like(self.pw_in)
         octave = Signal(range(OCTAVES))
@@ -150,8 +150,8 @@ class Oscillator(Elaboratable):
         step_incs = Array([Signal.like(base_inc, reset=inc)
                            for inc in self._base_incs])
         inc = Signal.like(phase)
-        pulse_sample = Signal.like(self.pulse_inlet.o_data)
-        saw_sample = Signal.like(self.saw_inlet.o_data)
+        pulse_sample = Signal.like(self.pulse_out.o_data)
+        saw_sample = Signal.like(self.saw_out.o_data)
 
         m = Module()
         with m.If(self.sync_in):
@@ -161,12 +161,12 @@ class Oscillator(Elaboratable):
             ]
 
         m.d.comb += [
-            self.note_outlet.o_ready.eq(True),
+            self.note_in.o_ready.eq(True),
         ]
-        with m.If(self.note_outlet.received()):
+        with m.If(self.note_in.received()):
             m.d.sync += [
-                note.eq(self.note_outlet.i_data.note),
-                octave.eq(div12(self.note_outlet.i_data.note)),
+                note.eq(self.note_in.i_data.note),
+                octave.eq(div12(self.note_in.i_data.note)),
             ]
         # Calculate pulse wave edges.  The pulse must rise and fall
         # exactly once per cycle.
@@ -228,7 +228,7 @@ class Oscillator(Elaboratable):
                 m.next = FSM.SAMPLE
 
             with m.State(FSM.SAMPLE):
-                samp_depth = self.saw_inlet.o_data.shape()[0]
+                samp_depth = self.saw_out.o_data.shape()[0]
                 samp_max = 2**(samp_depth - 1) - 1
                 m.d.sync += [
                     pulse_sample.eq(Mux(pulse_up, samp_max, -samp_max)),
@@ -237,22 +237,22 @@ class Oscillator(Elaboratable):
                 m.next = FSM.EMIT
 
             with m.State(FSM.EMIT):
-                with m.If(self.saw_inlet.i_ready & self.pulse_inlet.i_ready):
+                with m.If(self.saw_out.i_ready & self.pulse_out.i_ready):
                     m.d.sync += [
-                        self.pulse_inlet.o_valid.eq(True),
-                        self.pulse_inlet.o_data.eq(pulse_sample),
-                        self.saw_inlet.o_valid.eq(True),
-                        self.saw_inlet.o_data.eq(saw_sample),
+                        self.pulse_out.o_valid.eq(True),
+                        self.pulse_out.o_data.eq(pulse_sample),
+                        self.saw_out.o_valid.eq(True),
+                        self.saw_out.o_data.eq(saw_sample),
                     ]
                     m.next = FSM.START
 
-        with m.If(self.pulse_inlet.sent()):
+        with m.If(self.pulse_out.sent()):
             m.d.sync += [
-                self.pulse_inlet.o_valid.eq(False),
+                self.pulse_out.o_valid.eq(False),
             ]
-        with m.If(self.saw_inlet.sent()):
+        with m.If(self.saw_out.sent()):
             m.d.sync += [
-                self.saw_inlet.o_valid.eq(False),
+                self.saw_out.o_valid.eq(False),
             ]
         return m
 
@@ -262,9 +262,9 @@ if __name__ == '__main__':
     cfg = SynthConfig(1_000_000, divisor)
     cfg.describe()
     design = Oscillator(cfg)
-    design.note_outlet.leave_unconnected()
-    design.pulse_inlet.leave_unconnected()
-    design.saw_inlet.leave_unconnected()
+    design.note_in.leave_unconnected()
+    design.pulse_out.leave_unconnected()
+    design.saw_out.leave_unconnected()
 
     with Main(design).sim as sim:
         @sim.sync_process
@@ -274,22 +274,22 @@ if __name__ == '__main__':
                 pw = (50 * note - 360) % 128
                 print(f'note = {note}, pw = {pw}')
                 yield design.pw_in.eq(pw)
-                yield design.note_outlet.i_valid.eq(True)
-                yield design.note_outlet.i_data.note.eq(note)
+                yield design.note_in.i_valid.eq(True)
+                yield design.note_in.i_data.note.eq(note)
                 for _ in range(200):
                     yield
                     yield from delay(divisor - 1)
-                    yield design.note_outlet.i_valid.eq(False)
+                    yield design.note_in.i_valid.eq(False)
 
         @sim.sync_process
         def tick_proc():
             yield Passive()
             while True:
-                yield design.pulse_inlet.i_ready.eq(True)
-                yield design.saw_inlet.i_ready.eq(True)
+                yield design.pulse_out.i_ready.eq(True)
+                yield design.saw_out.i_ready.eq(True)
                 for i in range(cfg.osc_divisor):
                     yield
-                    if (yield design.pulse_inlet.o_valid):
-                        yield design.pulse_inlet.i_ready.eq(False)
-                    if (yield design.saw_inlet.o_valid):
-                        yield design.saw_inlet.i_ready.eq(False)
+                    if (yield design.pulse_out.o_valid):
+                        yield design.pulse_out.i_ready.eq(False)
+                    if (yield design.saw_out.o_valid):
+                        yield design.saw_out.i_ready.eq(False)

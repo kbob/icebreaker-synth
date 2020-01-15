@@ -76,8 +76,8 @@ class Top(Elaboratable):
         tens_segs = DigitPattern()
         seg7_out = SevenSegDriver(clk_freq, 100, 1)
         osc = Oscillator(cfg)
-        osc.pulse_inlet.leave_unconnected()
-        osc.saw_inlet.leave_unconnected()
+        osc.pulse_out.leave_unconnected()
+        osc.saw_out.leave_unconnected()
         gate = Gate(stereo_sample_spec(cfg.osc_depth))
         gate.signal_outlet.leave_unconnected()
         i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
@@ -102,7 +102,7 @@ class Top(Elaboratable):
 
         note_valid = midi_decode.note_msg_out.o_valid
         note_on = midi_decode.note_msg_out.o_data.onoff
-        osc_stereo = Cat(osc.pulse_inlet.o_data, osc.saw_inlet.o_data)
+        osc_stereo = Cat(osc.pulse_out.o_data, osc.saw_out.o_data)
 
         m.d.comb += [
             pll.clk_pin.eq(clk_pin),
@@ -126,10 +126,10 @@ class Top(Elaboratable):
 
             seg7_pins.eq(seg7_out.seg7),
 
-            gate.signal_outlet.i_valid.eq(osc.pulse_inlet.o_valid),
+            gate.signal_outlet.i_valid.eq(osc.pulse_out.o_valid),
             gate.signal_outlet.i_data.eq(osc_stereo),
-            osc.pulse_inlet.i_ready.eq(gate.signal_outlet.o_ready),
-            osc.saw_inlet.i_ready.eq(gate.signal_outlet.o_ready),
+            osc.pulse_out.i_ready.eq(gate.signal_outlet.o_ready),
+            osc.saw_out.i_ready.eq(gate.signal_outlet.o_ready),
 
             i2s_pins.eq(i2s_tx.tx_i2s),
         ]
