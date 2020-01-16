@@ -44,13 +44,20 @@ class Top(Elaboratable):
 
     def elaborate(self, platform):
         clk_in_freq = platform.default_clk_frequency
-        clk_freq = 2 * clk_in_freq
+        clk_freq = clk_in_freq * 4
+        osc_oversample = 4
+        out_oversample = 4
+        cfg = SynthConfig(
+            clk_freq,
+            osc_oversample=osc_oversample,
+            out_oversample=out_oversample,
+        )
+        cfg.set_build_options()
+        cfg.describe()
+
         clk_in_freq_mhz = clk_in_freq / 1_000_000
         clk_freq_mhz = clk_freq / 1_000_000
-        osc_divisor = int(clk_freq // 46_875)
 
-        cfg = SynthConfig(clk_freq=clk_freq, osc_divisor=osc_divisor)
-        assert cfg.osc_rate == 46_875, 'change with care.'
         uart_baud = 31250
         uart_divisor = int(clk_freq // uart_baud)
         status_duration = int(0.05 * clk_freq)
@@ -73,7 +80,9 @@ class Top(Elaboratable):
         osc.saw_out.leave_unconnected()
         gate = Gate(stereo_sample_spec(cfg.osc_depth))
         gate.signal_outlet.leave_unconnected()
-        i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
+        assert type(clk_freq) is float
+        # i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
+        i2s_tx = P_I2STx(cfg)
         recv_status = OneShot(duration=status_duration)
         err_status = OneShot(duration=status_duration)
         hex_display = HexDisplay(clk_freq, pwm_width=1)

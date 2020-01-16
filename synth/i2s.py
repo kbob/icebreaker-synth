@@ -79,10 +79,12 @@ class I2S(Elaboratable):
 
 class P_I2STx(Elaboratable):
 
-    def __init__(self, clk_freq, tx_rate, tx_depth=16):
-        self.clk_freq = clk_freq
-        self.tx_rate = tx_rate
-        self.tx_depth = tx_depth
+    # def __init__(self, clk_freq, tx_rate, tx_depth=16):
+    def __init__(self, cfg):
+        self.clk_freq = cfg.clk_freq
+        self.tx_rate = cfg.out_rate
+        self.tx_depth = cfg.out_depth
+        assert cfg.out_channels == 2
 
         self.sample_outlet = stereo_sample_spec(self.tx_depth).outlet()
         self.tx_i2s = I2STxRecord()
