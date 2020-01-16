@@ -1,5 +1,7 @@
 #!/usr/bin/env nmigen
 
+from numbers import Complex
+
 from nmigen import Array, Cat, Const, Elaboratable, Module, Mux, Record
 from nmigen import Signal, signed
 from nmigen.build import Resource
@@ -144,8 +146,8 @@ class I2STx(Elaboratable):
             lrck_divisor = lrck_divisor * 3 // 2
         mclk_freq = lrck_divisor * tx_rate
         mclk_divisor = int(clk_freq) // int(mclk_freq)
-        assert mclk_divisor == clk_freq / mclk_freq, (
-            f'I2STx: mclk_freq = {mclk_freq:,} must divide '
+        assert mclk_divisor // 2 == clk_freq / mclk_freq / 2, (
+            f'I2STx: 2 * mclk_freq = {2 * mclk_freq:,} must divide '
             f'clk_freq = {clk_freq:,}'
         )
         assert clk_freq > mclk_freq, (
