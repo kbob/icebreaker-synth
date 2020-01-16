@@ -5,11 +5,9 @@ from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
-from nmigen_lib import PLL
+from nmigen_lib import HexDisplay, PLL
 from nmigen_lib.pipe import Pipeline
 from nmigen_lib.pipe.uart import P_UARTRx
-from nmigen_lib.seven_segment.digit_pattern import DigitPattern
-from nmigen_lib.seven_segment.driver import SevenSegDriver
 
 from synth import Gate, P_I2STx, MIDIDecoder, MonoPriority
 from synth import Oscillator, SynthConfig, stereo_sample_spec
@@ -68,19 +66,18 @@ class Top(Elaboratable):
         m = Module()
         pll = PLL(freq_in_mhz=clk_in_freq_mhz, freq_out_mhz=clk_freq_mhz)
         uart_rx = P_UARTRx(divisor=uart_divisor)
-        recv_status = OneShot(duration=status_duration)
-        err_status = OneShot(duration=status_duration)
         midi_decode = MIDIDecoder()
         pri = MonoPriority()
-        ones_segs = DigitPattern()
-        tens_segs = DigitPattern()
-        seg7_out = SevenSegDriver(clk_freq, 100, 1)
         osc = Oscillator(cfg)
         osc.pulse_out.leave_unconnected()
         osc.saw_out.leave_unconnected()
         gate = Gate(stereo_sample_spec(cfg.osc_depth))
         gate.signal_outlet.leave_unconnected()
         i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
+        recv_status = OneShot(duration=status_duration)
+        err_status = OneShot(duration=status_duration)
+        hex_display = HexDisplay(clk_freq, pwm_width=1)
+
         m.domains += pll.domain # This switches the default clk domain
                                 # to the PLL-generated domain for Top
                                 # and all submodules.
@@ -88,17 +85,15 @@ class Top(Elaboratable):
         m.submodules.uart_rx = uart_rx
         m.submodules.midi = midi_decode
         m.submodules.pri = pri
-        m.submodules.recv_status = recv_status
-        m.submodules.err_status = err_status
-        m.submodules.ones_segs = ones_segs
-        m.submodules.tens_segs = tens_segs
-        m.submodules.seg7_out = seg7_out
         m.submodules.osc = osc
         m.submodules.gate = gate
         m.submodules.i2s_tx = i2s_tx
         m.submodules.event_pipe = Pipeline([uart_rx, midi_decode, pri, osc])
         m.submodules.gate_pipe = Pipeline([pri, gate])
         m.submodules.sample_pipe = Pipeline([gate, i2s_tx])
+        m.submodules.recv_status = recv_status
+        m.submodules.err_status = err_status
+        m.submodules.hex_display = hex_display
 
         note_valid = midi_decode.note_msg_out.o_valid
         note_on = midi_decode.note_msg_out.o_data.onoff
@@ -109,6 +104,13 @@ class Top(Elaboratable):
 
             uart_rx.rx_pin.eq(midi_uart_pins.rx),
 
+            gate.signal_outlet.i_valid.eq(osc.pulse_out.o_valid),
+            gate.signal_outlet.i_data.eq(osc_stereo),
+            osc.pulse_out.i_ready.eq(gate.signal_outlet.o_ready),
+            osc.saw_out.i_ready.eq(gate.signal_outlet.o_ready),
+
+            i2s_pins.eq(i2s_tx.tx_i2s),
+
             # Good LED flickers when Note On received.
             recv_status.trg.eq(note_valid & note_on),
             good_led.eq(recv_status.out),
@@ -117,21 +119,10 @@ class Top(Elaboratable):
             err_status.trg.eq(note_valid & ~note_on),
             bad_led.eq(err_status.out),
 
-            ones_segs.digit_in.eq(pri.voice_note_out.o_data.note[:4]),
-            tens_segs.digit_in.eq(pri.voice_note_out.o_data.note[4:]),
-
-            seg7_out.pwm.eq(pri.voice_gate_out.o_data.gate),
-            seg7_out.segment_patterns[0].eq(ones_segs.segments_out),
-            seg7_out.segment_patterns[1].eq(tens_segs.segments_out),
-
-            seg7_pins.eq(seg7_out.seg7),
-
-            gate.signal_outlet.i_valid.eq(osc.pulse_out.o_valid),
-            gate.signal_outlet.i_data.eq(osc_stereo),
-            osc.pulse_out.i_ready.eq(gate.signal_outlet.o_ready),
-            osc.saw_out.i_ready.eq(gate.signal_outlet.o_ready),
-
-            i2s_pins.eq(i2s_tx.tx_i2s),
+            # Hex display shows current MIDI note.
+            hex_display.i_data.eq(pri.voice_note_out.o_data.note),
+            hex_display.i_pwm.eq(pri.voice_gate_out.o_data.gate),
+            seg7_pins.eq(hex_display.o_seg7),
         ]
         return m
 

@@ -5,10 +5,9 @@ from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
+from nmigen_lib import HexDisplay
 from nmigen_lib.pipe import Pipeline
 from nmigen_lib.pipe.uart import P_UARTRx
-from nmigen_lib.seven_segment.digit_pattern import DigitPattern
-from nmigen_lib.seven_segment.driver import SevenSegDriver
 from synth import MIDIDecoder, MonoPriority
 
 class OneShot(Elaboratable):
@@ -59,17 +58,13 @@ class Top(Elaboratable):
         pri = MonoPriority()
         pri.voice_note_out.leave_unconnected()
         pri.voice_gate_out.leave_unconnected()
-        ones_segs = DigitPattern()
-        tens_segs = DigitPattern()
-        driver = SevenSegDriver(clk_freq, 100, 1)
+        hex_display = HexDisplay(clk_freq, pwm_width=1)
         m.submodules.uart_rx = uart_rx
         m.submodules.recv_status = recv_status
         m.submodules.err_status = err_status
         m.submodules.midi = midi_decode
         m.submodules.pri = pri
-        m.submodules.ones_segs = ones_segs
-        m.submodules.tens_segs = tens_segs
-        m.submodules.driver = driver
+        m.submodules.HexDisplay = hex_display
         m.submodules.pipeline = Pipeline([uart_rx, midi_decode, pri])
 
         note_valid = midi_decode.note_msg_out.o_valid
@@ -81,12 +76,9 @@ class Top(Elaboratable):
             err_status.trg.eq(note_valid & ~note_on),
             good_led.eq(recv_status.out),
             bad_led.eq(err_status.out),
-            ones_segs.digit_in.eq(pri.voice_note_out.o_data.note[:4]),
-            tens_segs.digit_in.eq(pri.voice_note_out.o_data.note[4:]),
-            driver.pwm.eq(pri.voice_gate_out.o_data.gate),
-            driver.segment_patterns[0].eq(ones_segs.segments_out),
-            driver.segment_patterns[1].eq(tens_segs.segments_out),
-            seg7_pins.eq(driver.seg7),
+            hex_display.i_data.eq(pri.voice_note_out.o_data.note),
+            hex_display.i_pwm.eq(pri.voice_gate_out.o_data.gate),
+            seg7_pins.eq(hex_display.o_seg7),
         ]
         return m
 
