@@ -5,36 +5,10 @@ from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
-from nmigen_lib import HexDisplay
+from nmigen_lib import HexDisplay, OneShot
 from nmigen_lib.pipe import Pipeline
 from nmigen_lib.pipe.uart import P_UARTRx
 from synth import MIDIDecoder, MonoPriority
-
-class OneShot(Elaboratable):
-
-    def __init__(self, duration):
-        self.duration = duration
-        self.trg = Signal()
-        self.out = Signal()
-        self.ports = (self.trg, self.out)
-
-    def elaborate(self, platform):
-        counter = Signal(range(-1, self.duration))
-        m = Module()
-        with m.If(self.trg):
-            m.d.sync += [
-                counter.eq(self.duration - 2),
-                self.out.eq(True),
-            ]
-        with m.Elif(counter[-1]):
-            m.d.sync += [
-                self.out.eq(False),
-            ]
-        with m.Else():
-            m.d.sync += [
-                counter.eq(counter - 1),
-            ]
-        return m
 
 
 class Top(Elaboratable):
@@ -72,10 +46,10 @@ class Top(Elaboratable):
 
         m.d.comb += [
             uart_rx.rx_pin.eq(uart_pins.rx),
-            recv_status.trg.eq(note_valid & note_on),
-            err_status.trg.eq(note_valid & ~note_on),
-            good_led.eq(recv_status.out),
-            bad_led.eq(err_status.out),
+            recv_status.i_trg.eq(note_valid & note_on),
+            err_status.i_trg.eq(note_valid & ~note_on),
+            good_led.eq(recv_status.o_pulse),
+            bad_led.eq(err_status.o_pulse),
             hex_display.i_data.eq(pri.voice_note_out.o_data.note),
             hex_display.i_pwm.eq(pri.voice_gate_out.o_data.gate),
             seg7_pins.eq(hex_display.o_seg7),

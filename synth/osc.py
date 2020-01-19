@@ -134,10 +134,12 @@ class Oscillator(Elaboratable):
         self.inc_depth = max_fdepth
         self.shift = shift
         self._base_incs = [int(i) for i in incs]
-        print(f'osc: phase_depth = {self.phase_depth}')
-        print(f'     inc_depth = {self.inc_depth}')
-        print(f'     shift = {self.shift}')
-
+        if config.verbose:
+            print(f'Oscillator:')
+            print(f'    phase_depth = {self.phase_depth}')
+            print(f'    inc_depth   = {self.inc_depth}')
+            print(f'    shift       = {self.shift}')
+            print()
 
     def elaborate(self, platform):
         phase = Signal(self.phase_depth)

@@ -29,6 +29,7 @@ class SynthConfig:
         self.min_freq_depth = min_freq_depth
         self.max_freq_depth = max_freq_depth
         self.build_options = {}
+        self.verbose = None     # false, but non-numeric
 
     @property
     def osc_divisor(self):
@@ -59,19 +60,21 @@ class SynthConfig:
         fields.update({k: getattr(self, k)
                        for (k, v) in type(self).__dict__.items()
                        if not k.startswith('_') and isdatadescriptor(v)})
-        w = max(len(f) for f in list(fields) + [opts_label])
+        wk = max(len(f) for f in list(fields) + [opts_label])
+        wv = max(len(f'{int(v):,}') for v in fields.values())
         for key in sorted(fields):
-            print(f'    {key:{w}} = {fields[key]:#10,}')
-        wo = w + 7
+            print(f'    {key:{wk}} = {fields[key]:#{wv},}')
+        wo = wk + 7
         if self.build_options:
-            print(f'    {opts_label:{w}} = {{')
-            wo = w + 6
+            print(f'    {opts_label:{wk}} = {{')
+            wo = wk + 6
             for (k, v) in self.build_options.items():
                 print(f'    {"":{wo}}{k} = "{v}"')
-            print(f'    {"":{w}}   }}')
+            print(f'    {"":{wk}}   }}')
         else:
-            print(f'    {opts_label:{w}} = {{}}')
+            print(f'    {opts_label:{wk}} = {{}}')
         print()
+        self.verbose = (None, ) # true, but non-numeric
 
 
 if __name__ == '__main__':

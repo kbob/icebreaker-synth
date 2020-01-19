@@ -5,62 +5,32 @@ from nmigen.build import Attrs, Pins, Resource, Subsignal
 from nmigen_boards.icebreaker import ICEBreakerPlatform
 from nmigen_boards.resources import UARTResource
 
-from nmigen_lib import HexDisplay, PLL
+from nmigen_lib import HexDisplay, OneShot, PLL
 from nmigen_lib.pipe import Pipeline
 from nmigen_lib.pipe.uart import P_UARTRx
 
-from synth import Gate, P_I2STx, MIDIDecoder, MonoPriority
+from synth import ChannelPair, Gate, P_I2STx, MIDIDecoder, MonoPriority
 from synth import Oscillator, SynthConfig, stereo_sample_spec
-
-
-class OneShot(Elaboratable):
-
-    def __init__(self, duration):
-        self.duration = duration
-        self.trg = Signal()
-        self.out = Signal()
-        self.ports = (self.trg, self.out)
-
-    def elaborate(self, platform):
-        counter = Signal(range(-1, self.duration))
-        m = Module()
-        with m.If(self.trg):
-            m.d.sync += [
-                counter.eq(self.duration - 2),
-                self.out.eq(True),
-            ]
-        with m.Elif(counter[-1]):
-            m.d.sync += [
-                self.out.eq(False),
-            ]
-        with m.Else():
-            m.d.sync += [
-                counter.eq(counter - 1),
-            ]
-        return m
 
 
 class Top(Elaboratable):
 
     def elaborate(self, platform):
         clk_in_freq = platform.default_clk_frequency
-        clk_freq = clk_in_freq * 4
-        osc_oversample = 4
-        out_oversample = 4
         cfg = SynthConfig(
-            clk_freq,
-            osc_oversample=osc_oversample,
-            out_oversample=out_oversample,
+            clk_freq=clk_in_freq * 4,
+            osc_oversample=4,
+            out_oversample=4,
         )
         cfg.set_build_options()
         cfg.describe()
 
         clk_in_freq_mhz = clk_in_freq / 1_000_000
-        clk_freq_mhz = clk_freq / 1_000_000
+        clk_freq_mhz = cfg.clk_freq / 1_000_000
 
         uart_baud = 31250
-        uart_divisor = int(clk_freq // uart_baud)
-        status_duration = int(0.05 * clk_freq)
+        uart_divisor = int(cfg.clk_freq // uart_baud)
+        status_duration = int(0.05 * cfg.clk_freq)
 
         clk_pin = platform.request(platform.default_clk, dir='-')
         midi_uart_pins = platform.request('uart', 1)
@@ -71,62 +41,52 @@ class Top(Elaboratable):
         dbg_pins = platform.request('dbg')
 
         m = Module()
-        pll = PLL(freq_in_mhz=clk_in_freq_mhz, freq_out_mhz=clk_freq_mhz)
-        uart_rx = P_UARTRx(divisor=uart_divisor)
-        midi_decode = MIDIDecoder()
-        pri = MonoPriority()
-        osc = Oscillator(cfg)
-        osc.pulse_out.leave_unconnected()
-        osc.saw_out.leave_unconnected()
-        gate = Gate(stereo_sample_spec(cfg.osc_depth))
-        gate.signal_outlet.leave_unconnected()
-        assert type(clk_freq) is float
-        # i2s_tx = P_I2STx(clk_freq, cfg.out_rate)
-        i2s_tx = P_I2STx(cfg)
-        recv_status = OneShot(duration=status_duration)
-        err_status = OneShot(duration=status_duration)
-        hex_display = HexDisplay(clk_freq, pwm_width=1)
+
+        m.submodules.pll = pll = PLL(
+            freq_in_mhz=clk_in_freq_mhz,
+            freq_out_mhz=clk_freq_mhz,
+        )
+        m.submodules.uart_rx = uart_rx = P_UARTRx(divisor=uart_divisor)
+        m.submodules.midi = midi_decode = MIDIDecoder()
+        m.submodules.pri = pri = MonoPriority()
+        m.submodules.osc = osc = Oscillator(cfg)
+        m.submodules.pair = pair = ChannelPair(cfg.osc_depth)
+        m.submodules.gate = gate = Gate(stereo_sample_spec(cfg.osc_depth))
+        m.submodules.i2s_tx = i2s_tx = P_I2STx(cfg)
+        m.submodules.recv_status = recv_status = OneShot(status_duration)
+        m.submodules.err_status = err_status = OneShot(status_duration)
+        m.submodules.hex_display = hex_display = HexDisplay(
+            cfg.clk_freq,
+            pwm_width=1,
+        )
 
         m.domains += pll.domain # This switches the default clk domain
                                 # to the PLL-generated domain for Top
                                 # and all submodules.
-        m.submodules.pll = pll
-        m.submodules.uart_rx = uart_rx
-        m.submodules.midi = midi_decode
-        m.submodules.pri = pri
-        m.submodules.osc = osc
-        m.submodules.gate = gate
-        m.submodules.i2s_tx = i2s_tx
+
+        # connect modules with pipes.
         m.submodules.event_pipe = Pipeline([uart_rx, midi_decode, pri, osc])
         m.submodules.gate_pipe = Pipeline([pri, gate])
-        m.submodules.sample_pipe = Pipeline([gate, i2s_tx])
-        m.submodules.recv_status = recv_status
-        m.submodules.err_status = err_status
-        m.submodules.hex_display = hex_display
+        m.submodules.pulse_pipe = Pipeline([osc.pulse_out, pair.left_in])
+        m.submodules.saw_pipe = Pipeline([osc.saw_out, pair.right_in])
+        m.submodules.sample_pipe = Pipeline([pair, gate, i2s_tx])
 
         note_valid = midi_decode.note_msg_out.o_valid
         note_on = midi_decode.note_msg_out.o_data.onoff
-        osc_stereo = Cat(osc.pulse_out.o_data, osc.saw_out.o_data)
 
         m.d.comb += [
+            # Connect external pins.
             pll.clk_pin.eq(clk_pin),
-
             uart_rx.rx_pin.eq(midi_uart_pins.rx),
-
-            gate.signal_outlet.i_valid.eq(osc.pulse_out.o_valid),
-            gate.signal_outlet.i_data.eq(osc_stereo),
-            osc.pulse_out.i_ready.eq(gate.signal_outlet.o_ready),
-            osc.saw_out.i_ready.eq(gate.signal_outlet.o_ready),
-
             i2s_pins.eq(i2s_tx.tx_i2s),
 
             # Good LED flickers when Note On received.
-            recv_status.trg.eq(note_valid & note_on),
-            good_led.eq(recv_status.out),
+            recv_status.i_trg.eq(note_valid & note_on),
+            good_led.eq(recv_status.o_pulse),
 
             # Bad LED flickers when Note Off received.
-            err_status.trg.eq(note_valid & ~note_on),
-            bad_led.eq(err_status.out),
+            err_status.i_trg.eq(note_valid & ~note_on),
+            bad_led.eq(err_status.o_pulse),
 
             # Hex display shows current MIDI note.
             hex_display.i_data.eq(pri.voice_note_out.o_data.note),
