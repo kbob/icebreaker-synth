@@ -106,7 +106,7 @@ class Decimator(Elaboratable):
         # First, scale it so the total kernel weight is 1.0.
         # Then, scale by a power of 2 so the coefficients are as large
         # as possible.  (Assume signed 16 bit coefficients.)
-        kernel /= kernel.sum()
+        kernel /= 1.01 * kernel.sum()
 
         peak = max(kernel)
         assert peak == kernel[M//2 + 1]
@@ -522,14 +522,16 @@ class Decimator(Elaboratable):
 
 if __name__ == '__main__':
     M = None
-    M = 14
-    N = M + 2
-    cfg = SynthConfig(5.12e6, osc_oversample=4)
-    # cfg = SynthConfig(48e6, osc_oversample=32)
+    # M = 14
+    cfg = SynthConfig(5.12e6, osc_oversample=8)
+    cfg = SynthConfig(48e6, osc_oversample=32, out_oversample=4)
     cfg.describe()
     design = Decimator(cfg, M=M)
     design.samples_in.leave_unconnected()
     design.samples_out.leave_unconnected()
+    M = design.M
+    N = M + 2
+    R = design.R
 
     # Work around nMigen issue #280
     i_valid = Signal.like(design.samples_in.i_valid)
@@ -565,18 +567,29 @@ if __name__ == '__main__':
             R = cfg.osc_rate // cfg.out_rate
             assert isinstance(R, int)
             yield from delay(3)
-            for i in range(200):
-                x = i == 10 and 32767 or i
-                x = i
-                yield from send_sample(x)
-                yield from delay(R - 1)
-            from math import sin
-            for i in range(800):
-                x -= 1234
-                x = (sin(i / 20) + 1) % 1
-                x = int(65536 * x)
-                yield from send_sample(x % 65536 - 32768)
-                yield from delay(R - 1)
+            # for i in range(200):
+            #     x = i == 10 and 32767 or i
+            #     x = i
+            #     yield from send_sample(x)
+            #     yield from delay(R - 1)
+            # freq = 2000
+            # for i in range(4 / freq):
+            #     from math import sin, tau
+            #     y = sin(tau * i * 4000 / cfg.osc_rate)
+            #     y = (y + 1) % 1
+            #     y = 2 * y - 1
+            #     y = int(32767 * y)
+            #     yield from send_sample(y)
+            #     yield from delay(R - 1)
+            with open('/tmp/foo') as foo:
+                for line in foo:
+                    if line == 'end\n':
+                        break
+                    x = float(line)
+                    x = min(+1, max(-1, x))
+                    x = int(32767 * x)
+                    yield from send_sample(x)
+                    yield from delay(R - 1)
 
         @sim.sync_process
         def sample_out_process():
@@ -594,4 +607,4 @@ if __name__ == '__main__':
             yield Passive()
             while True:
                 yield from recv_sample()
-                yield from delay(2)
+                yield from delay(M)
