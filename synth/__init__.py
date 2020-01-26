@@ -6,17 +6,19 @@ import sys
 if sys.argv[:1] == ['-m']:
     __all__ = []
 else:
-    from .config   import SynthConfig
-    from .gate     import Gate
-    from .i2s      import I2S, P_I2STx, I2STx, I2SRx, stereo_sample_spec
-    from .midi     import MIDIDecoder
-    from .osc      import Oscillator, mono_sample_spec
-    from .pair     import ChannelPair
-    from .priority import MonoPriority
-    from .util     import MIDI_note_to_freq
+    from .config    import SynthConfig
+    from .decimator import Decimator
+    from .gate      import Gate
+    from .i2s       import I2S, P_I2STx, I2STx, I2SRx, stereo_sample_spec
+    from .midi      import MIDIDecoder
+    from .osc       import Oscillator, mono_sample_spec
+    from .pair      import ChannelPair
+    from .priority  import MonoPriority
+    from .util      import MIDI_note_to_freq
 
     __all__ = [
                'ChannelPair',
+               'Decimator',
                'Gate',
                'I2S',
                'I2SRx',
