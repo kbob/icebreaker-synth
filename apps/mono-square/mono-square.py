@@ -9,8 +9,8 @@ from nmigen_lib import HexDisplay, OneShot, PLL
 from nmigen_lib.pipe import Pipeline
 from nmigen_lib.pipe.uart import P_UARTRx
 
-from synth import ChannelPair, Gate, P_I2STx, MIDIDecoder, MonoPriority
-from synth import Oscillator, SynthConfig, stereo_sample_spec
+from synth import ChannelPair, Decimator, Gate, P_I2STx, MIDIDecoder
+from synth import MonoPriority, Oscillator, SynthConfig, stereo_sample_spec
 
 
 class Top(Elaboratable):
@@ -18,9 +18,9 @@ class Top(Elaboratable):
     def elaborate(self, platform):
         clk_in_freq = platform.default_clk_frequency
         cfg = SynthConfig(
-            clk_freq=clk_in_freq * 4,
-            osc_oversample=4,
-            out_oversample=4,
+            clk_freq=clk_in_freq * 2,
+            osc_oversample=8,
+            out_oversample=2,
         )
         cfg.set_build_options()
         cfg.describe()
@@ -50,8 +50,10 @@ class Top(Elaboratable):
         m.submodules.midi = midi_decode = MIDIDecoder()
         m.submodules.pri = pri = MonoPriority()
         m.submodules.osc = osc = Oscillator(cfg)
-        m.submodules.pair = pair = ChannelPair(cfg.osc_depth)
-        m.submodules.gate = gate = Gate(stereo_sample_spec(cfg.osc_depth))
+        m.submodules.l_dec = l_dec = Decimator(cfg)
+        # m.submodules.r_dec = r_dec = Decimator(cfg)
+        m.submodules.pair = pair = ChannelPair(cfg.out_depth)
+        m.submodules.gate = gate = Gate(stereo_sample_spec(cfg.out_depth))
         m.submodules.i2s_tx = i2s_tx = P_I2STx(cfg)
         m.submodules.recv_status = recv_status = OneShot(status_duration)
         m.submodules.err_status = err_status = OneShot(status_duration)
@@ -67,7 +69,7 @@ class Top(Elaboratable):
         # connect modules with pipes.
         m.submodules.event_pipe = Pipeline([uart_rx, midi_decode, pri, osc])
         m.submodules.gate_pipe = Pipeline([pri, gate])
-        m.submodules.pulse_pipe = Pipeline([osc.pulse_out, pair.left_in])
+        m.submodules.pulse_pipe = Pipeline([osc.pulse_out, l_dec, pair.left_in])
         m.submodules.saw_pipe = Pipeline([osc.saw_out, pair.right_in])
         m.submodules.sample_pipe = Pipeline([pair, gate, i2s_tx])
 
