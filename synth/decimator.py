@@ -4,7 +4,7 @@ from math import ceil, floor, log2, pi, tau
 
 import numpy as np
 
-from nmigen import Array, Cat, Const, Elaboratable, Module, Signal
+from nmigen import Array, Cat, Const, Elaboratable, Memory, Module, Signal
 from nmigen import signed, unsigned
 from nmigen.asserts import Assert
 from nmigen.back.pysim import Passive
@@ -48,7 +48,7 @@ class Decimator(Elaboratable):
         assert cfg.out_depth == 16
         self.R = cfg.osc_rate // cfg.out_rate
         if M is None:
-            # Quantization noise is objetionable for kernels above 128 taps.
+            # Quantization noise is objectionable for kernels above 128 taps.
             Mp2 = min(128, 2**(floor(log2(cfg.clk_freq // cfg.out_rate)) - 1))
             M = Mp2 - 2
         BW = 4 / M
@@ -140,10 +140,9 @@ class Decimator(Elaboratable):
         #         print(str(kernel).replace('\n', '\n' + 16 * ' '))
         #     print()
 
-        self.kernel = kernel
+        self.kernel = [int(c) for c in kernel]
         self.shift = shift
         self.acc_width = acc_width
-        return kernel
 
     def elaborate(self, platform):
 
@@ -156,13 +155,18 @@ class Decimator(Elaboratable):
         # kernel_RAM is a buffer of convolution kernel coefficents.
         # It is read-only.  The 0'th element is zero, because the kernel
         # has length N-1.
-        kernel_RAM = Array(Const(c, COEFF_SHAPE) for c in self.kernel)
+        kernel_RAM = Memory(width=COEFF_WIDTH, depth=256, init=kernel)
+        # kernel_RAM = Memory(width=COEFF_WIDTH, depth=N, init=kernel)
+        m.submodules.kr_port = kr_port = kernel_RAM.read_port()
 
         # sample_RAM is a circular buffer for incoming samples.
-        sample_RAM = Array(
-            Signal(signed(self.sample_depth), reset_less=True, reset=0)
-            for _ in range(N)
-        )
+        # sample_RAM = Array(
+        #     Signal(signed(self.sample_depth), reset_less=True, reset=0)
+        #     for _ in range(N)
+        # )
+        sample_RAM = Memory(width=self.sample_depth, depth=N, init=[0] * N)
+        m.submodules.sw_port = sw_port = sample_RAM.write_port()
+        m.submodules.sr_port = sr_port = sample_RAM.read_port()
 
         # The rotors index through sample_RAM.  They have an extra MSB
         # so we can distinguish between buffer full and buffer empty.
@@ -207,10 +211,13 @@ class Decimator(Elaboratable):
         # put incoming samples into sample_RAM.
         m.d.comb += [
             self.samples_in.o_ready.eq(~buf_is_full),
+            sw_port.addr.eq(w_rotor[:-1]),
+            sw_port.data.eq(self.samples_in.i_data),
         ]
+        m.d.sync += sw_port.en.eq(self.samples_in.received())
         with m.If(self.samples_in.received()):
             m.d.sync += [
-                sample_RAM[w_rotor[:-1]].eq(self.samples_in.i_data),
+                # sample_RAM[w_rotor[:-1]].eq(self.samples_in.i_data),
                 w_rotor.eq(w_rotor + 1),
             ]
 
@@ -241,15 +248,36 @@ class Decimator(Elaboratable):
         acc = Signal(signed(self.acc_width))
 
         # Stage 0.
-        with m.If(buf_has_readable & p_ready[0] & (c_index != 0)):
+        en0 = Signal()
+        m.d.comb += en0.eq(buf_has_readable & p_ready[0] * (c_index != 0))
+
+        # with m.If(en0):
+        #     m.d.sync += [
+        #         coeff.eq(kernel_RAM[c_index]),
+        #     ]
+        m.d.comb += coeff.eq(kr_port.data)
+        with m.If(en0):
             m.d.sync += [
-                coeff.eq(kernel_RAM[c_index]),
                 sample.eq(sample_RAM[r_rotor[:-1]]),
+            ]
+        with m.If(en0):
+            m.d.sync += [
                 c_index.eq(c_index + 1),
                 r_rotor.eq(r_rotor + 1),
                 p_valid[0].eq(True),
                 p_complete[0].eq(False),
+                # kr_port.addr.eq(c_index + 1),
             ]
+        m.d.comb += kr_port.addr.eq(c_index)
+        # with m.If(buf_has_readable & p_ready[0] & (c_index != 0)):
+        #     m.d.sync += [
+        #         coeff.eq(kernel_RAM[c_index]),
+        #         sample.eq(sample_RAM[r_rotor[:-1]]),
+        #         c_index.eq(c_index + 1),
+        #         r_rotor.eq(r_rotor + 1),
+        #         p_valid[0].eq(True),
+        #         p_complete[0].eq(False),
+        #     ]
         with m.If((~buf_has_readable | ~p_ready[0]) & (c_index != 0)):
             m.d.sync += [
                 p_valid[0].eq(False),
@@ -523,8 +551,9 @@ class Decimator(Elaboratable):
 if __name__ == '__main__':
     M = None
     # M = 14
-    cfg = SynthConfig(5.12e6, osc_oversample=8)
+    # cfg = SynthConfig(5.12e6, osc_oversample=4)
     cfg = SynthConfig(48e6, osc_oversample=32, out_oversample=4)
+    # cfg = SynthConfig(24e6, osc_oversample=8, out_oversample=2)
     cfg.describe()
     design = Decimator(cfg, M=M)
     design.samples_in.leave_unconnected()
@@ -572,24 +601,26 @@ if __name__ == '__main__':
             #     x = i
             #     yield from send_sample(x)
             #     yield from delay(R - 1)
-            # freq = 2000
-            # for i in range(4 / freq):
-            #     from math import sin, tau
-            #     y = sin(tau * i * 4000 / cfg.osc_rate)
-            #     y = (y + 1) % 1
-            #     y = 2 * y - 1
-            #     y = int(32767 * y)
-            #     yield from send_sample(y)
-            #     yield from delay(R - 1)
-            with open('/tmp/foo') as foo:
-                for line in foo:
-                    if line == 'end\n':
-                        break
-                    x = float(line)
-                    x = min(+1, max(-1, x))
-                    x = int(32767 * x)
-                    yield from send_sample(x)
-                    yield from delay(R - 1)
+            freq = 1000
+            nsamp_in = int(4 * cfg.osc_rate // freq)
+            for i in range(nsamp_in):
+                from math import sin, tau
+                y = sin(tau * i * freq / cfg.osc_rate)
+                y *= 0.95
+                y = (y + 1) % 1
+                y = 2 * y - 1
+                y = int(32767 * y)
+                yield from send_sample(y)
+                yield from delay(R - 1)
+            # with open('/tmp/foo') as foo:
+            #     for line in foo:
+            #         if line == 'end\n':
+            #             break
+            #         x = float(line)
+            #         x = min(+1, max(-1, x))
+            #         x = int(32767 * x)
+            #         yield from send_sample(x)
+            #         yield from delay(R - 1)
 
         @sim.sync_process
         def sample_out_process():
