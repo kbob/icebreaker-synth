@@ -1,0 +1,39 @@
+#!/usr/bin/env python
+
+import numpy as np
+from pprint import pprint
+import re
+import sys
+import wave
+
+line_regex = r'b([01]*) 98\Z'
+match_line = re.compile(line_regex).match
+
+def read_samples():
+    for line in open('b98'):
+        line = line.strip()
+        m = match_line(line)
+        if not m:
+            print(f'mystery line: {line!r}')
+        bin_str = m.group(1)
+        samp = int(bin_str, 0b10)
+        if samp > 32767:
+            samp -= 65536
+        yield samp
+
+samples = np.array(list(read_samples()))
+int_samples = samples.astype(np.int16)
+byte_samples = int_samples.tobytes()
+
+print(len(samples))
+print(samples[:10])
+print(byte_samples[:10])
+
+wav_file_name = sys.argv[1]
+wf = wave.open(wav_file_name, 'wb')
+wf.setnchannels(1)
+wf.setsampwidth(2)
+wf.setframerate(187500)
+wf.setnframes(len(samples))
+wf.writeframes(byte_samples)
+wf.close()
