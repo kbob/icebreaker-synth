@@ -106,7 +106,7 @@ class Decimator(Elaboratable):
         # First, scale it so the total kernel weight is 1.0.
         # Then, scale by a power of 2 so the coefficients are as large
         # as possible.  (Assume signed 16 bit coefficients.)
-        kernel /= 1.01 * kernel.sum()
+        kernel /= kernel.sum()
 
         peak = max(kernel)
         assert peak == kernel[M//2 + 1]
